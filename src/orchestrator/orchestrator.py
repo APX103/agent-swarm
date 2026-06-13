@@ -23,39 +23,51 @@ from src.container_pool.pool import ContainerPoolManager, PooledContainer
 
 logger = logging.getLogger(__name__)
 
-ORCHESTRATOR_SYSTEM_PROMPT = """你是一个 Agent Swarm 编排器。你的职责是：
+ORCHESTRATOR_SYSTEM_PROMPT = """你是一个 Agent Swarm 编排器——多 Agent 协作系统的核心大脑。
 
-1. 分析用户的请求，理解需要完成什么任务
-2. 将任务拆解为子任务，分配给合适的 Worker Agent
-3. 通过调用工具来启动 Worker Agent 并发送任务
-4. 监控 Worker 的进度
-5. 汇总所有 Worker 的结果，给用户一个完整的回答
+## 你的职责
+1. 深度分析用户请求，理解真实意图和技术需求
+2. 制定结构化执行计划（含 API 契约、技术选型、任务拆分）
+3. 将计划写入共享上下文，分派 Worker Agent 执行
+4. 审查 Worker 产出，必要时要求修正
+5. 汇总结果，交付完整方案
 
-你必须使用以下工具来完成工作：
-- `dispatch_agent`: 启动一个 Worker Agent 并向它发送任务
-- `check_agent_status`: 查询 Worker Agent 的任务状态
-- `read_artifacts`: 读取共享目录中的文件内容
-- `finalize`: 汇总结果，完成任务
+## 工作流程（严格按顺序执行）
 
-工作流程（严格按顺序执行）：
-1. 分析用户请求，决定需要哪些类型的 Agent
-2. 立即调用 dispatch_agent 启动需要的 Worker（每次一个）
-3. 等待 Worker 完成（通过 check_agent_status 轮询）
-4. 读取 Worker 产出（通过 read_artifacts）
-5. 如果有问题，继续 dispatch_agent 让 Worker 修复
-6. 所有工作完成后，调用 finalize 返回最终结果
+### 第一步：规划（必须首先执行）
+调用 `plan_task` 工具生成结构化计划。计划必须包含：
+- **需求分析**：用户想要什么，核心功能列表
+- **技术选型**：前端/后端技术栈、数据库、关键依赖
+- **API 契约**：前后端接口定义（REST endpoint、请求/响应格式）
+- **子任务拆分**：每个子任务指明 agent_type 和具体工作内容
+- **集成要点**：前后端如何对接，需要共享的数据格式
 
-重要：你必须调用工具来完成任务，不要直接用文字回复。第一件事就是调用 dispatch_agent。
+### 第二步：分派
+根据计划调用 `dispatch_agent`（单任务）或 `dispatch_agents_parallel`（多任务并行）。
+- 独立的任务使用 `dispatch_agents_parallel` 并行执行（如前端和后端可以并行）
+- 有依赖关系的任务串行执行
+- 共享上下文（API 契约、设计规范）会自动注入到每个 Worker 的任务描述中
 
-可用的 Agent 类型：
-- "frontend-ux-pro": 前端开发（HTML/CSS/JS/React/Vue）
-- "backend-engineer": 后端开发（API/数据库/Python/FastAPI）
-- "general-agent": 通用任务
+### 第三步：审查
+Worker 完成后：
+- 用 `read_artifacts` / `list_artifacts` 检查产出物
+- 如果产出不完整或有明显问题，调用 `dispatch_agent` 让 Worker 修正
+- 如果前后端接口不匹配，指出冲突并要求修正
 
-规则：
-- 始终使用 dispatch_agent 启动 Agent，不要自己生成代码
+### 第四步：交付
+确认所有产出合格后，调用 `finalize` 提供总结。
+
+## 关键原则
+- **先规划再执行**：永远不要跳过 plan_task 步骤
+- **API 契约先行**：前后端必须有统一的接口定义
+- **最大化并行**：独立任务用 dispatch_agents_parallel
+- **质量把关**：finalize 前必须检查产出物
 - 如果 dispatch_agent 返回错误，分析原因并重试
-- 所有工作完成后必须调用 finalize
+
+## 可用的 Agent 类型
+- "frontend-ux-pro": 前端开发（HTML/CSS/JS/React/Vue），擅长 UI/UX
+- "backend-engineer": 后端开发（API/数据库/Python/FastAPI/Node.js）
+- "general-agent": 通用任务（文档、分析、脚本等）
 """
 
 
@@ -92,6 +104,7 @@ class Orchestrator:
         self._dispatched: dict[str, DispatchedAgent] = {}  # task_id -> DispatchedAgent
         self._current_task_id: Optional[str] = None
         self._current_tenant_id: Optional[str] = None
+        self._shared_context: str = ""  # plan_task 生成的共享上下文
         
         # 工具定义
         self._tools = self._define_tools()
@@ -102,15 +115,67 @@ class Orchestrator:
             {
                 "type": "function",
                 "function": {
+                    "name": "plan_task",
+                    "description": (
+                        "生成结构化任务计划。这是分派 Agent 前必须执行的第一步。"
+                        "计划包含需求分析、技术选型、API 契约、子任务拆分和集成要点。"
+                        "计划会被保存为共享上下文，自动注入到每个 Worker 的任务中。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "analysis": {
+                                "type": "string",
+                                "description": "需求分析：用户意图、核心功能列表",
+                            },
+                            "tech_stack": {
+                                "type": "string",
+                                "description": "技术选型：前端/后端技术栈、数据库、关键依赖",
+                            },
+                            "api_contract": {
+                                "type": "string",
+                                "description": "前后端 API 契约：REST endpoint 列表、请求/响应 JSON 格式。前后端共同遵循此定义。",
+                            },
+                            "subtasks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "agent_type": {
+                                            "type": "string",
+                                            "description": "Agent 类型 ID",
+                                        },
+                                        "description": {
+                                            "type": "string",
+                                            "description": "该子任务的具体工作内容和要求",
+                                        },
+                                    },
+                                    "required": ["agent_type", "description"],
+                                },
+                                "description": "子任务列表，每个包含 agent_type 和工作描述",
+                            },
+                            "integration_notes": {
+                                "type": "string",
+                                "description": "集成要点：前后端如何对接、共享数据格式、注意事项",
+                            },
+                        },
+                        "required": ["analysis", "subtasks"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "dispatch_agent",
-                    "description": "启动一个 Worker Agent 并向它发送任务。可用的 agent_type 有：" + 
-                                   ", ".join(ac.name for ac in self.settings.agent_cards),
+                    "description": "启动一个 Worker Agent 并发送任务。共享上下文（来自 plan_task）会自动注入。" +
+                                   "可用的 agent_type 有：" +
+                                   ", ".join(ac.id for ac in self.settings.agent_cards),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "agent_type": {
                                 "type": "string",
-                                "description": "Agent 类型 ID",
+                                "description": "Agent 类型 ID，如 'frontend-ux-pro'",
                             },
                             "task": {
                                 "type": "string",
@@ -118,6 +183,41 @@ class Orchestrator:
                             },
                         },
                         "required": ["agent_type", "task"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "dispatch_agents_parallel",
+                    "description": (
+                        "并行启动多个 Worker Agent。适用于无依赖关系的独立任务（如前端和后端可并行开发）。"
+                        "共享上下文（来自 plan_task）会自动注入到每个 Agent。"
+                        "所有 Agent 并发执行，全部完成后返回。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agents": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "agent_type": {
+                                            "type": "string",
+                                            "description": "Agent 类型 ID",
+                                        },
+                                        "task": {
+                                            "type": "string",
+                                            "description": "该 Agent 的具体任务描述",
+                                        },
+                                    },
+                                    "required": ["agent_type", "task"],
+                                },
+                                "description": "并行分派的 Agent 列表",
+                            },
+                        },
+                        "required": ["agents"],
                     },
                 },
             },
@@ -201,6 +301,7 @@ class Orchestrator:
         self._current_task_id = task_id
         self._current_tenant_id = tenant_id
         self._dispatched.clear()
+        self._shared_context = ""
         self._messages = [
             {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
@@ -215,14 +316,14 @@ class Orchestrator:
                     "data": data,
                 })
         
-        max_iterations = 15  # 防止无限循环（减少到15，更快结束）
+        max_iterations = 25  # 允许更多迭代以容纳 plan → dispatch → review 流程
         final_result = "任务执行完毕，但未产生最终结果。"
         
         for i in range(max_iterations):
             await emit("orchestrator_thinking", {"iteration": i})
             
             # 如果已经分配了 agent 且在最后几轮，检查是否有足够的结果来 finalize
-            if i == max_iterations - 3 and self._dispatched:
+            if i == max_iterations - 4 and self._dispatched:
                 logger.info("Approaching max iterations, forcing finalize check")
                 self._messages.append({
                     "role": "user",
@@ -235,9 +336,9 @@ class Orchestrator:
                     self.client.chat.completions.create,
                     model=self.model,
                     messages=self._messages,
-                    tools=self._tools if i < max_iterations - 2 else None,  # 最后两轮不带工具，强制文本回复
-                    temperature=0.1,
-                    max_tokens=4096,
+                    tools=self._tools if i < max_iterations - 3 else None,  # 最后三轮不带工具，强制文本回复
+                    temperature=0.3,
+                    max_tokens=8192,
                 )
             except Exception as e:
                 logger.error(f"LLM call failed: {e}")
@@ -309,8 +410,12 @@ class Orchestrator:
     
     async def _execute_tool(self, name: str, args: dict) -> str:
         """执行工具调用"""
-        if name == "dispatch_agent":
+        if name == "plan_task":
+            return await self._tool_plan_task(args)
+        elif name == "dispatch_agent":
             return await self._tool_dispatch_agent(args)
+        elif name == "dispatch_agents_parallel":
+            return await self._tool_dispatch_agents_parallel(args)
         elif name == "check_agent_status":
             return await self._tool_check_agent_status(args)
         elif name == "read_artifacts":
@@ -322,10 +427,52 @@ class Orchestrator:
         else:
             return f"Unknown tool: {name}"
     
+    async def _tool_plan_task(self, args: dict) -> str:
+        """plan_task 工具实现 — 生成结构化计划并存储为共享上下文"""
+        analysis = args.get("analysis", "")
+        tech_stack = args.get("tech_stack", "")
+        api_contract = args.get("api_contract", "")
+        subtasks = args.get("subtasks", [])
+        integration_notes = args.get("integration_notes", "")
+
+        sections = ["=== 项目计划（共享上下文） ===\n"]
+        if analysis:
+            sections.append(f"## 需求分析\n{analysis}\n")
+        if tech_stack:
+            sections.append(f"## 技术选型\n{tech_stack}\n")
+        if api_contract:
+            sections.append(f"## API 契约（前后端必须共同遵循）\n{api_contract}\n")
+        if integration_notes:
+            sections.append(f"## 集成要点\n{integration_notes}\n")
+
+        self._shared_context = "\n".join(sections)
+
+        if self.task_manager:
+            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            if artifacts_dir:
+                plan_dir = artifacts_dir / "_plan"
+                plan_dir.mkdir(parents=True, exist_ok=True)
+                (plan_dir / "project_plan.md").write_text(self._shared_context, encoding="utf-8")
+
+        subtask_summary = "\n".join(
+            f"  {i+1}. [{st.get('agent_type', '?')}] {st.get('description', '')[:80]}"
+            for i, st in enumerate(subtasks)
+        )
+
+        can_parallel = len(set(st.get("agent_type", "") for st in subtasks)) > 1
+
+        return (
+            f"计划已生成并保存为共享上下文。\n\n"
+            f"子任务列表（{len(subtasks)} 个）：\n{subtask_summary}\n\n"
+            f"建议：{'多个不同类型的 Agent 可使用 dispatch_agents_parallel 并行执行' if can_parallel else '使用 dispatch_agent 串行执行'}"
+        )
+
     async def _tool_dispatch_agent(self, args: dict) -> str:
         """dispatch_agent 工具实现"""
         agent_type = args.get("agent_type", "")
         task = args.get("task", "")
+
+        full_task = self._build_worker_task(task)
         
         # 从池中 checkout 容器
         container = await self.pool.checkout(
@@ -347,7 +494,7 @@ class Orchestrator:
         a2a_client = A2AClient(a2a_url, timeout=300.0)
         
         # 发送任务
-        message = A2AMessage(role="user", text=task)
+        message = A2AMessage(role="user", text=full_task)
         a2a_task = await a2a_client.send_message(message, blocking=True)
         
         dispatched = DispatchedAgent(
@@ -366,6 +513,69 @@ class Orchestrator:
                 f"任务状态: {state}\n"
                 f"Agent 响应: {result_text[:500]}")
     
+    def _build_worker_task(self, task: str) -> str:
+        """将共享上下文注入 Worker 任务描述"""
+        if self._shared_context:
+            return f"{self._shared_context}\n\n---\n\n## 你的具体任务\n{task}"
+        return task
+    
+    async def _tool_dispatch_agents_parallel(self, args: dict) -> str:
+        """dispatch_agents_parallel 工具实现 — 并行分派多个 Worker"""
+        agents_spec = args.get("agents", [])
+        if not agents_spec:
+            return "错误：agents 列表为空"
+
+        async def _run_single(spec: dict) -> tuple[str, str]:
+            agent_type = spec.get("agent_type", "")
+            task = spec.get("task", "")
+            full_task = self._build_worker_task(task)
+
+            container = await self.pool.checkout(
+                agent_card_id=agent_type,
+                task_id=self._current_task_id,
+                model=self.settings.llm.default_model,
+                base_url=self.settings.llm.default_base_url,
+                api_key=self.settings.llm.default_api_key,
+                tenant_id=self._current_tenant_id,
+            )
+            if not container:
+                return (agent_type, f"错误：没有可用的 Worker 容器")
+
+            dispatch_id = str(uuid.uuid4())[:8]
+            a2a_url = f"http://localhost:{container.port}"
+            a2a_client = A2AClient(a2a_url, timeout=300.0)
+
+            message = A2AMessage(role="user", text=full_task)
+            a2a_task = await a2a_client.send_message(message, blocking=True)
+
+            dispatched = DispatchedAgent(
+                container=container,
+                agent_card_id=agent_type,
+                a2a_task_id=a2a_task.task_id if a2a_task else None,
+                a2a_client=a2a_client,
+            )
+
+            async with asyncio.Lock():
+                self._dispatched[dispatch_id] = dispatched
+
+            state = a2a_task.state if a2a_task else "unknown"
+            result_text = a2a_task.message if a2a_task else "无响应"
+
+            return (
+                agent_type,
+                f"Agent '{agent_type}'（dispatch_id={dispatch_id}）\n"
+                f"  状态: {state}\n"
+                f"  响应: {result_text[:300]}"
+            )
+
+        results = await asyncio.gather(*[_run_single(spec) for spec in agents_spec])
+
+        lines = [f"并行分派完成（{len(results)} 个 Agent）："]
+        for agent_type, detail in results:
+            lines.append(f"\n[{agent_type}]\n{detail}")
+
+        return "\n".join(lines)
+
     async def _tool_check_agent_status(self, args: dict) -> str:
         """check_agent_status 工具实现"""
         dispatch_id = args.get("dispatch_id", "")
