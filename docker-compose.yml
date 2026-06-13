@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  agent-swarm:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./shared_output:/workspace/shared_output
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-glm-coding-plan}
+      - LLM_DEFAULT_BASE_URL=${LLM_DEFAULT_BASE_URL:-https://open.bigmodel.cn/api/coding/paas/v4}
+      - LLM_DEFAULT_API_KEY=${LLM_DEFAULT_API_KEY}
+      - CONTAINER_POOL_SIZE=${CONTAINER_POOL_SIZE:-5}
+      - CONTAINER_BASE_PORT=${CONTAINER_BASE_PORT:-9001}
+      - SHARED_OUTPUT_BASE=/workspace/shared_output
+    restart: unless-stopped

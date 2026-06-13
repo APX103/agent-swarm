@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>框架对比调研：LangGraph vs Google ADK</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#58a6ff;--code-bg:#1a1e24;--accent:#f0883e;--green:#3fb950;--red:#f85149}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:20px 40px}
+h1{color:var(--heading);font-size:2em;margin:40px 0 20px;border-bottom:1px solid var(--border);padding-bottom:10px}
+h2{color:var(--heading);font-size:1.4em;margin:30px 0 15px;cursor:pointer;padding-left:15px;border-left:3px solid var(--accent)}
+h3{color:var(--accent);font-size:1.1em;margin:20px 0 10px}
+p,li{margin:8px 0}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.9em}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:15px 0}
+pre code{background:none;padding:0;font-size:0.85em;line-height:1.5}
+table{width:100%;border-collapse:collapse;margin:15px 0}
+th{background:var(--surface);color:var(--heading);text-align:left;padding:10px 12px;border:1px solid var(--border)}
+td{padding:8px 12px;border:1px solid var(--border)}
+tr:nth-child(even){background:var(--surface)}
+.note{background:var(--surface);border-left:3px solid var(--green);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.warn{background:var(--surface);border-left:3px solid var(--red);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.75em;font-weight:bold}
+.badge-green{background:var(--green);color:#000}
+.badge-red{background:var(--red);color:#fff}
+.badge-yellow{background:var(--accent);color:#000}
+.verdict{background:#1a2332;border:2px solid var(--green);border-radius:12px;padding:20px;margin:20px 0}
+.verdict h3{color:var(--green);font-size:1.2em;margin-bottom:10px}
+nav{position:fixed;left:0;top:0;width:240px;height:100vh;background:var(--surface);border-right:1px solid var(--border);padding:20px 15px;overflow-y:auto}
+nav a{display:block;padding:6px 10px;color:var(--text);text-decoration:none;border-radius:4px;margin:2px 0;font-size:0.9em}
+nav a:hover{background:var(--border);color:var(--heading)}
+nav h3{color:var(--heading);font-size:0.95em;margin:15px 0 5px}
+main{margin-left:260px;max-width:960px;padding:20px 30px 80px}
+@media(max-width:900px){nav{display:none}main{margin-left:0}}
+</style>
+</head>
+<body>
+<nav>
+<h3>目录</h3>
+<a href="#langgraph">1. LangGraph</a>
+<a href="#langgraph-core">1.1 核心概念</a>
+<a href="#langgraph-a2a">1.2 A2A 支持</a>
+<a href="#langgraph-multi">1.3 多 Agent 编排</a>
+<a href="#langgraph-deploy">1.4 Docker 部署</a>
+<a href="#langgraph-prebuilt">1.5 预构建 Agent</a>
+<a href="#langgraph-state">1.6 状态管理</a>
+<a href="#adk">2. Google ADK</a>
+<a href="#adk-core">2.1 核心类</a>
+<a href="#adk-a2a">2.2 A2A 原生支持</a>
+<a href="#adk-multi">2.3 多 Agent 模式</a>
+<a href="#adk-llm">2.4 LLM 集成</a>
+<a href="#adk-deploy">2.5 Docker 部署</a>
+<a href="#adk-context">2.6 上下文管理</a>
+<a href="#compare">3. 对比矩阵</a>
+<a href="#decision">4. 决策结论</a>
+</nav>
+<main>
+
+<h1>框架对比调研：LangGraph vs Google ADK</h1>
+<p>针对 Docker-based Agent Swarm + A2A 通信场景的深度对比分析</p>
+
+<h2 id="langgraph">1. LangGraph</h2>
+<p><span class="badge badge-green">MIT (core)</span> <span class="badge badge-red">Proprietary (Platform)</span> | Python, TS, Java | ~15k stars | v0.6+</p>
+
+<h3 id="langgraph-core">1.1 核心概念</h3>
+<p>LangGraph 是一个低级别的图编排框架，灵感来自 Google Pregel 系统。工作流建模为有向图，使用消息传递。</p>
+
+<p><strong>State（状态）</strong>：图中流动的共享数据</p>
+<ul>
+<li>Schema 选项：<code>TypedDict</code>（推荐）、<code>dataclass</code>、Pydantic <code>BaseModel</code></li>
+<li>每个 state key 有独立的 <strong>reducer</strong> 函数：override（默认）、append（<code>Annotated[list, add]</code>）、自定义</li>
+<li>预构建 <code>MessagesState</code> + <code>add_messages</code> reducer 用于聊天历史</li>
+</ul>
+
+<p><strong>Node（节点）</strong>：纯 Python 函数，接收 state → 计算 → 返回 state 更新</p>
+<ul>
+<li>签名：<code>(state, config, runtime) -> state_updates</code></li>
+<li>自动转换为 <code>RunnableLambda</code></li>
+<li>必须设计为<strong>幂等</strong>（重执行时完全重放）</li>
+</ul>
+
+<p><strong>Edge（边）</strong>：基于当前 state 决定下一个节点的执行</p>
+<ul>
+<li><strong>正常边</strong>：固定转换 <code>graph.add_edge("A", "B")</code></li>
+<li><strong>条件边</strong>：动态分支 <code>graph.add_conditional_edges("A", route_func)</code></li>
+<li>执行模型：离散 "super-step"，并行节点在同一 step 运行</li>
+</ul>
+
+<pre><code># LangGraph 基础示例
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph import MessagesState
+
+def orchestrator(state: MessagesState):
+    # 分析任务，决定路由
+    return {"next": "code_worker"}
+
+def code_worker(state: MessagesState):
+    # 执行代码任务
+    return {"messages": [AIMessage(content="代码已写完")]}
+
+workflow = StateGraph(MessagesState)
+workflow.add_node("orchestrator", orchestrator)
+workflow.add_node("code_worker", code_worker)
+workflow.add_edge(START, "orchestrator")
+workflow.add_conditional_edges("orchestrator",
+    lambda s: s["next"],
+    {"code_worker": "code_worker", END: END})
+workflow.add_edge("code_worker", "orchestrator")  # 返回
+
+graph = workflow.compile()</code></pre>
+
+<h3 id="langgraph-a2a">1.2 A2A 支持</h3>
+<div class="warn">
+<strong>⚠️ A2A 支持现状</strong><br>
+LangGraph 的 A2A 支持在 <strong>LangSmith Agent Server</strong> 中提供，<strong>非 OSS 核心</strong>。<br>
+OSS 端需要使用 <code>a2a-sdk[http-server]</code> 作为 work-around。<br>
+LangChain 团队成员评价："OSS doesn't have a particular 'server' implementation yet"
+</div>
+
+<ul>
+<li>LangSmith Agent Server 提供 A2A 端点：<code>/a2a/{assistant_id}</code></li>
+<li>支持方法：<code>message/send</code>, <code>message/stream</code>, <code>tasks/get</code></li>
+<li>Auto-expose AgentCard：<code>/.well-known/agent-card.json?assistant_id={id}</code></li>
+<li>需要：<code>pip install "langgraph-api>=0.4.21"</code> + LangSmith API key / LangGraph Cloud license</li>
+</ul>
+
+<h3 id="langgraph-multi">1.3 多 Agent 编排模式</h3>
+<table>
+<tr><th>模式</th><th>说明</th></tr>
+<tr><td>Supervisor</td><td>协调者 Agent 分解任务，委派给专家 Agent</td></tr>
+<tr><td>Hierarchical</td><td>多层管理者路由到叶子 Agent</td></tr>
+<tr><td>Swarm Transfer</td><td>Agent 间 handoff，通过条件边切换控制权</td></tr>
+<tr><td>Parallel</td><td>Super-step 模型天然支持并行节点执行</td></tr>
+</table>
+
+<h3 id="langgraph-deploy">1.4 Docker 部署</h3>
+<p><strong>LangGraph Platform（托管）</strong>：需要 license</p>
+<p><strong>自托管（OSS）</strong>：</p>
+<ul>
+<li>LangServe（FastAPI 适配器）包装编译后的图</li>
+<li>docker-compose：app container + PostgreSQL container</li>
+<li><code>langgraph dev</code> 本地开发</li>
+</ul>
+<div class="warn">
+<strong>限制</strong>：LangServe 无内置 auth、无后台运行、无 cron。部署包装器是专有的。
+</div>
+
+<h3 id="langgraph-prebuilt">1.5 预构建 Agent</h3>
+<pre><code>from langgraph.prebuilt import create_react_agent
+
+agent = create_react_agent(
+    model="gpt-4o",
+    tools=[my_tool_1, my_tool_2],
+    prompt=system_prompt,
+    state_schema=CustomState,
+    checkpointer=memory,
+)
+# ReAct 循环：LLM → tool calls → tool responses → LLM → ...直到完成</code></pre>
+
+<h3 id="langgraph-state">1.6 状态管理</h3>
+<ul>
+<li><strong>Checkpointing</strong>：在 super-step 边界保存 state（MemorySaver / PostgresSaver / RedisSaver）</li>
+<li><strong>短期记忆</strong>：图中 state（messages, 当前任务数据）</li>
+<li><strong>长期记忆</strong>：<code>BaseStore</code> — 持久 KV store 跨会话</li>
+<li><strong>上下文压缩</strong>：手动实现（summarization 节点、滚动窗口）</li>
+</ul>
+
+<hr>
+
+<h2 id="adk">2. Google ADK (Agent Development Kit)</h2>
+<p><span class="badge badge-green">Apache 2.0</span> | Python, TS, Go, Java, Kotlin | 20.1k stars | v2.2.0 GA</p>
+
+<h3 id="adk-core">2.1 核心类</h3>
+
+<pre><code># LlmAgent（别名 Agent）
+from google.adk import Agent
+
+agent = Agent(
+    name="researcher",
+    model="gemini-flash-latest",     # 任意 LLM
+    description="Answers research questions",  # 供其他 Agent 路由用
+    instruction="You are a research assistant...",
+    tools=[search_tool, analysis_tool],
+    output_key="research_result",    # State key for output
+)
+
+# Runner（AgentRunner）
+from google.adk import Runner
+
+runner = Runner(
+    app_name="my_app",
+    agent=root_agent,
+    session_service=my_session_service,  # SQLite, Firestore, custom
+    artifact_service=my_artifact_service,
+    memory_service=my_memory_service,
+)
+
+async for event in runner.run_async(
+    user_id="user123",
+    session_id="session456",
+    new_message=user_message,
+):
+    print(event.stringify_content())</code></pre>
+
+<h3 id="adk-a2a">2.2 A2A 原生支持</h3>
+<div class="note">
+<strong>✅ ADK 是 A2A 的参考实现</strong><br>
+A2A 从 v0.1.0 起内置于 ADK，提供：
+<ul>
+<li><code>RemoteA2aAgent</code> — 消费远程 A2A Agent</li>
+<li>Server-side A2A 端点暴露（FastAPI-based）</li>
+<li>自动 AgentCard 生成</li>
+<li>完整任务生命周期管理</li>
+</ul>
+</div>
+
+<h3 id="adk-multi">2.3 多 Agent 编排模式（ADK 2.0 Workflow）</h3>
+<pre><code>from google.adk import Agent, Workflow
+
+# 顺序执行
+root = Workflow(edges=[("START", agent_a, agent_b, agent_c)])
+
+# 并行执行
+root = Workflow(edges=[
+    ("START", agent_a, agent_b),   # 并行启动 A 和 B
+    (agent_a, "merge"),            # A 完成后汇合
+    (agent_b, "merge"),            # B 完成后汇合
+])
+
+# Orchestrator 模式（推荐我们的场景）
+orchestrator = Agent(
+    name="orchestrator",
+    model="glm-coding-plan",
+    tools=[AgentTool(frontend_agent), AgentTool(backend_agent)],
+    instruction="分析用户请求，分派给合适的专业 Agent..."
+)
+frontend_agent = Agent(name="frontend", model="glm-coding-plan", tools=[...])
+backend_agent = Agent(name="backend", model="glm-coding-plan", tools=[...])
+
+orchestrator.sub_agents = [frontend_agent, backend_agent]</code></pre>
+
+<h3 id="adk-llm">2.4 LLM 集成</h3>
+<pre><code># 每个 Agent 可以使用不同的模型和配置
+agent_a = Agent(model="gemini-2.5-flash", generate_content_config={"temperature": 0.1})
+agent_b = Agent(model="gpt-4o", generate_content_config={"temperature": 0.7})
+agent_c = Agent(model="glm-coding-plan", ...)  # 自定义 OpenAI-compatible endpoint</code></pre>
+<p>支持任意生成式 AI 模型：Gemini、OpenAI、Anthropic、本地模型、企业托管服务。无需 Google Cloud。</p>
+
+<h3 id="adk-deploy">2.5 Docker 部署</h3>
+<pre><code># Dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+ENTRYPOINT ["python", "main.py"]
+
+# FastAPI 入口
+from google.adk.cli.fast_api import get_fast_api_app
+app = get_fast_api_app(agent)</code></pre>
+<ul>
+<li>完全离线/断连可用 — 不需要 Google Cloud</li>
+<li>Session Service：本地用 SQLite，分布式用 Firestore/PostgreSQL</li>
+<li>原生 Docker 支持，无 license 限制</li>
+</ul>
+
+<h3 id="adk-context">2.6 上下文管理</h3>
+<div class="note">
+<strong>✅ ADK 的核心优势 — 自动上下文管理</strong><br>
+<ul>
+<li><strong>自动过滤</strong>不相关事件</li>
+<li><strong>自动摘要</strong>较旧的对话轮次</li>
+<li><strong>延迟加载</strong> artifact — 需要时才加载</li>
+<li><strong>Token 用量追踪</strong></li>
+<li>16 个生命周期 callback hook</li>
+</ul>
+</div>
+
+<hr>
+
+<h2 id="compare">3. 对比矩阵</h2>
+<table>
+<tr><th>特性</th><th>LangGraph</th><th>Google ADK</th></tr>
+<tr><td>许可证</td><td>MIT (core) / 专有 (Platform)</td><td>Apache 2.0</td></tr>
+<tr><td>语言</td><td>Python, TS, Java(社区)</td><td>Python, TS, Go, Java, Kotlin</td></tr>
+<tr><td>核心范式</td><td>低级图编排 StateGraph</td><td>Agent-centric + Workflow</td></tr>
+<tr><td>A2A 支持</td><td><span class="badge badge-red">需 LangSmith license</span></td><td><span class="badge badge-green">原生内置</span></td></tr>
+<tr><td>多 Agent 模式</td><td>Supervisor, Hierarchical, Swarm, Parallel</td><td>Sequential, Parallel, Loop, Orchestrator</td></tr>
+<tr><td>预构建 Agent</td><td>create_react_agent</td><td>LlmAgent + AgentTool</td></tr>
+<tr><td>LLM 灵活性</td><td>via LangChain integrations</td><td>原生任意 LLM</td></tr>
+<tr><td>上下文压缩</td><td>手动实现</td><td><span class="badge badge-green">自动</span></td></tr>
+<tr><td>Docker 部署</td><td>需 license (Platform) / LangServe</td><td>原生 FastAPI，离线可用</td></tr>
+<tr><td>MCP 支持</td><td>via langchain-mcp-adapters</td><td>原生内置</td></tr>
+<tr><td>持久化</td><td>Checkpointers (Postgres/Redis)</td><td>Session Service (SQLite/Firestore)</td></tr>
+<tr><td>Stars</td><td>~15k</td><td>20.1k</td></tr>
+</table>
+
+<h2 id="decision">4. 决策结论</h2>
+
+<div class="verdict">
+<h3>🏆 推荐：Google ADK + a2a-sdk</h3>
+<p>对于我们的场景（Docker 容器 Agent Swarm + A2A 通信 + orchestrator-worker 模式），推荐 <strong>Google ADK</strong> 作为 Agent 框架，配合 <strong>a2a-sdk</strong> 实现 Agent 间通信。</p>
+<p><strong>核心理由：</strong></p>
+<ol>
+<li><strong>A2A 是一等公民</strong> — ADK 是 A2A 的参考实现，原生支持 RemoteA2aAgent、Server-side A2A 端点</li>
+<li><strong>Docker 是一等公民</strong> — FastAPI 入口，离线可用，无 license 限制</li>
+<li><strong>自动上下文管理</strong> — 过滤、摘要、延迟加载，无需手动实现</li>
+<li><strong>Per-Agent 配置</strong> — 每个 Agent 独立模型/API key/工具</li>
+<li><strong>Apache 2.0</strong> — 完全开源，无厂商锁定</li>
+</ol>
+<p><strong>LangGraph 的优势场景：</strong>需要最大程度的图执行控制、已深度投资 LangChain 生态、复杂 DAG 分支。</p>
+<p><strong>我们的方案：</strong>ADK 负责 Agent 运行时 + 编排逻辑，a2a-sdk 负责 Agent 间通信协议，Docker + 自定义容器池管理负责沙箱隔离。</p>
+</div>
+
+<footer style="margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#666;font-size:0.85em">
+<p>调研日期：2026-06-13 | 来源：langchain.org, github.com/googleapis/adk-python, langchain-ai/langgraph</p>
+</footer>
+</main>
+</body>
+</html>

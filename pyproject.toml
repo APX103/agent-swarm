@@ -1,0 +1,25 @@
+[project]
+name = "agent-swarm"
+version = "1.0.0"
+description = "Docker-based Multi-Agent Swarm with A2A Protocol"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "docker>=7.0.0",
+    "httpx>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

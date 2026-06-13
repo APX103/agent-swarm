@@ -1,0 +1,66 @@
+# Agent Swarm - 项目配置
+# 默认配置文件
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# 默认 LLM 配置
+llm:
+  default_model: "glm-4.7"
+  default_base_url: "https://open.bigmodel.cn/api/coding/paas/v4"
+  default_api_key: YOUR_API_KEY_HERE
+
+# 容器池配置
+container_pool:
+  pool_size: 5            # 预启动容器数
+  max_overflow: 3         # 溢出上限
+  max_container_uses: 50  # 容器最大使用次数
+  image_name: "swarm-worker:latest"
+  network_name: "swarm-net"
+  base_port: 9001         # Worker 端口起始
+  mem_limit: "512m"
+  cpu_limit: 0.5
+
+# 存储配置
+storage:
+  shared_output_base: "/home/apx103/work/swarm/shared_output"
+
+# 超时配置（秒）
+timeouts:
+  agent_startup: 30
+  task_execution: 600
+  container_checkout: 10
+
+# Agent Card 预定义
+agent_cards:
+  - id: "frontend-ux-pro"
+    name: "Frontend UX Pro"
+    description: "专业前端开发 Agent，擅长 UI/UX 设计和 React/Vue/HTML+CSS+JS 实现"
+    skills:
+      - id: "frontend-dev"
+        name: "Frontend Development"
+        description: "开发响应式前端应用"
+        tags: ["frontend", "react", "vue", "ui", "ux", "css", "html", "javascript"]
+      - id: "ui-review"
+        name: "UI/UX Review"
+        description: "审查 UI 设计并提供改进建议"
+        tags: ["design", "review", "accessibility"]
+
+  - id: "backend-engineer"
+    name: "Backend Engineer"
+    description: "专业后端开发 Agent，擅长 API 设计、数据库操作和服务端逻辑"
+    skills:
+      - id: "backend-dev"
+        name: "Backend Development"
+        description: "开发 RESTful API、数据库设计、服务端逻辑"
+        tags: ["backend", "api", "database", "python", "node", "fastapi", "express"]
+
+  - id: "general-agent"
+    name: "General Agent"
+    description: "通用 Agent，可以处理各种编程和非编程任务"
+    skills:
+      - id: "general"
+        name: "General Task"
+        description: "处理通用任务"
+        tags: ["general", "coding", "writing", "analysis"]

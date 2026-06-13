@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Virtual environments
+.venv/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / Secrets
+.env
+config/default.yaml
+
+# Pool runtime configs (injected at runtime, contain API keys)
+.pool_configs/
+
+# Test / Debug artifacts
+.pytest_cache/
+debug_*.py
+test_tool_call.py
+run_service.sh
+
+# Shared output (runtime artifacts, not source)
+shared_output/
+
+# Docker
+docker/.pool_configs/

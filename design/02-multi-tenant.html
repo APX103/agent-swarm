@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Agent Swarm - 多租户与上下文管理设计</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; line-height: 1.7; color: #1a1a2e; background: #f8f9fa; }
+        h1 { color: #16213e; border-bottom: 3px solid #0f3460; padding-bottom: 10px; }
+        h2 { color: #0f3460; margin-top: 40px; }
+        h3 { color: #533483; }
+        code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-family: 'Fira Code', monospace; font-size: 0.9em; }
+        pre { background: #1a1a2e; color: #a8e6cf; padding: 20px; border-radius: 8px; overflow-x: auto; }
+        pre code { background: none; color: inherit; }
+        .diagram { background: #fff; border: 2px solid #e0e0e0; border-radius: 10px; padding: 30px; margin: 20px 0; }
+        .box { border: 2px solid #0f3460; border-radius: 8px; padding: 12px; margin: 8px; display: inline-block; min-width: 150px; text-align: center; }
+        .arrow { color: #0f3460; font-weight: bold; margin: 0 10px; }
+        table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+        th, td { border: 1px solid #dee2e6; padding: 10px 15px; text-align: left; }
+        th { background: #0f3460; color: white; }
+        tr:nth-child(even) { background: #f1f3f5; }
+        .tag { display: inline-block; background: #0f3460; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
+        .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 15px 0; }
+        .info { background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 15px; margin: 15px 0; }
+    </style>
+</head>
+<body>
+
+<h1>🏗️ 多租户、上下文管理与产物分发</h1>
+<p>设计文档 v1.0 | Agent Swarm</p>
+
+<h2>1. 多租户架构</h2>
+
+<h3>1.1 租户模型</h3>
+<p>采用 <strong>共享基础设施、逻辑隔离</strong> 的多租户模型：</p>
+
+<div class="diagram">
+    <table>
+        <tr><th>维度</th><th>方案</th><th>说明</th></tr>
+        <tr><td>API 层</td><td>tenant_id 参数</td><td>每个请求携带 tenant_id，未指定则使用 "default"</td></tr>
+        <tr><td>任务隔离</td><td>目录命名空间</td><td><code>shared_output/tenants/{tenant_id}/tasks/{task_id}/</code></td></tr>
+        <tr><td>容器池</td><td>共享池 + 按需复用</td><td>容器不绑定租户，通过 config injection 动态分配</td></tr>
+        <tr><td>模型配置</td><td>租户级别覆盖</td><td>支持不同租户使用不同 LLM（API key、endpoint）</td></tr>
+        <tr><td>产物分发</td><td>租户独立 ZIP + API 下载</td><td>产物按任务归档，通过 API 带鉴权下载</td></tr>
+    </table>
+</div>
+
+<h3>1.2 请求流程</h3>
+<pre><code>Client → POST /api/chat { message, tenant_id: "acme-corp" }
+  → TaskManager.create_task(tenant_id="acme-corp")
+    → shared_output/tenants/acme-corp/tasks/{task_id}/
+      ├── frontend/   ← Worker 写入
+      ├── backend/    ← Worker 写入
+      └── _final/     ← 最终产物
+  → Orchestrator.execute()
+    → checkout container → inject config (含 tenant context)
+    → Workers write to shared dir
+  → TaskManager.complete_task()
+  → Client → GET /api/tasks/{task_id}/download → ZIP
+</code></pre>
+
+<h3>1.3 扩展：租户配置</h3>
+<p>未来可扩展 <code>config/tenants/</code> 目录：</p>
+<pre><code># config/tenants/acme-corp.yaml
+llm:
+  model: "gpt-4o"
+  base_url: "https://api.openai.com/v1"
+  api_key: "${ACME_OPENAI_KEY}"
+
+container_pool:
+  pool_size: 10
+  mem_limit: "512m"
+</code></pre>
+
+<h2>2. 上下文管理</h2>
+
+<h3>2.1 Agent 上下文策略</h3>
+<p>Agent 是 <strong>任务执行型</strong>，不需要长期记忆。采用以下策略：</p>
+
+<table>
+    <tr><th>策略</th><th>实现</th><th>说明</th></tr>
+    <tr>
+        <td>短期上下文</td>
+        <td>LLM conversation buffer</td>
+        <td>仅保持当前任务的对话历史</td>
+    </tr>
+    <tr>
+        <td>自动压缩</td>
+        <td>Token 阈值触发摘要</td>
+        <td>当上下文超过阈值（如 16K tokens），Orchestrator 生成摘要替换旧消息</td>
+    </tr>
+    <tr>
+        <td>任务间隔离</td>
+        <td>每次 checkout 新容器</td>
+        <td>任务完成后容器重置，新任务在干净环境中执行</td>
+    </tr>
+    <tr>
+        <td>Orchestrator 上下文</td>
+        <td>精简式</td>
+        <td>Orchestrator 只看 Worker 返回的摘要和产物列表，不看实现细节</td>
+    </tr>
+</table>
+
+<h3>2.2 上下文压缩算法</h3>
+<pre><code># Orchestrator 的上下文压缩
+class ContextCompressor:
+    MAX_TOKENS = 16000
+    SUMMARY_THRESHOLD = 12000  # 到达此值时触发压缩
+    
+    def compress(self, messages):
+        if estimated_tokens(messages) < self.SUMMARY_THRESHOLD:
+            return messages
+        
+        # 保留最近 N 条消息
+        recent = messages[-5:]
+        
+        # 对旧消息生成摘要
+        old_messages = messages[:-5]
+        summary = llm.summarize(old_messages)
+        
+        return [{"role": "system", "content": f"历史摘要: {summary}"}] + recent
+</code></pre>
+
+<h3>2.3 Worker 的上下文管理</h3>
+<p>Worker 在容器内运行，有自己的上下文窗口：</p>
+<ul>
+    <li><strong>输入</strong>：Orchestrator 发来的任务描述（通过 A2A 协议）</li>
+    <li><strong>工具调用历史</strong>：文件写入、命令执行的中间结果</li>
+    <li><strong>输出</strong>：最终结果摘要 + 产物文件列表</li>
+    <li>任务完成后容器重置，所有上下文自动清除</li>
+</ul>
+
+<h2>3. 产物分发</h2>
+
+<h3>3.1 产物生命周期</h3>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│  产物分发流程                                              │
+│                                                          │
+│  Worker → 写入 shared_output/tenants/{tid}/tasks/{id}/   │
+│    ├── frontend/index.html                               │
+│    ├── frontend/styles.css                                 │
+│    └── backend/main.py                                     │
+│                                                          │
+│  TaskManager.complete_task()                               │
+│    → 扫描目录，收集产物列表                                 │
+│    → 发射 "complete" 事件（含产物列表）                     │
+│                                                          │
+│  Client → GET /api/tasks/{id}/artifacts                   │
+│    → 返回产物文件列表 + 大小                               │
+│                                                          │
+│  Client → GET /api/tasks/{id}/download                   │
+│    → 返回 ZIP 压缩包（所有产物）                           │
+│                                                          │
+│  自动清理（可选 cron）：                                    │
+│    → 7天后删除已完成的任务产物                              │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+
+<h3>3.2 产物访问 API</h3>
+<table>
+    <tr><th>Endpoint</th><th>方法</th><th>说明</th></tr>
+    <tr><td><code>/api/tasks/{id}/artifacts</code></td><td>GET</td><td>列出任务所有产物文件（含大小）</td></tr>
+    <tr><td><code>/api/tasks/{id}/download</code></td><td>GET</td><td>下载完整产物 ZIP 包</td></tr>
+    <tr><td><code>/api/tasks/{id}/files/{path}</code></td><td>GET</td><td>（未来）查看单个产物内容</td></tr>
+</table>
+
+<h3>3.3 WebSocket 实时推送</h3>
+<pre><code>// 客户端连接 WebSocket
+ws://host/ws/tasks/{task_id}
+
+// 接收事件
+{ "type": "status_change", "old_status": "running", "new_status": "completed" }
+{ "type": "agent_progress", "agent": "frontend-ux-pro", "message": "HTML 完成" }
+{ "type": "complete", "result": "网站已构建完成", "artifacts": [...] }
+</code></pre>
+
+<h2>4. 安全考虑</h2>
+
+<div class="warning">
+    <strong>⚠️ 当前版本安全边界</strong>
+    <ul>
+        <li>V1 不做用户认证/授权，依赖网络层隔离</li>
+        <li>容器通过 Docker 内置隔离，限制 CPU/内存</li>
+        <li>未来版本需添加：API Key 认证、租户配额、容器安全加固</li>
+    </ul>
+</div>
+
+<h3>4.1 容器安全加固路线</h3>
+<table>
+    <tr><th>阶段</th><th>措施</th><th>优先级</th></tr>
+    <tr><td>V1（当前）</td><td>资源限制（CPU/内存）</td><td>✅ 已实现</td></tr>
+    <tr><td>V1.1</td><td><code>--read-only</code> 文件系统 + tmpfs</td><td>高</td></tr>
+    <tr><td>V1.1</td><td><code>--security-opt=no-new-privileges</code></td><td>高</td></tr>
+    <tr><td>V2</td><td>gVisor / Kata Containers</td><td>中</td></tr>
+    <tr><td>V2</td><td>NetworkPolicy 限制容器出站</td><td>中</td></tr>
+</table>
+
+<h2>5. 总结</h2>
+
+<div class="info">
+    <strong>✅ 已实现</strong>
+    <ul>
+        <li>基于 tenant_id 的目录隔离</li>
+        <li>任务生命周期管理 + 事件广播</li>
+        <li>产物收集 + ZIP 打包下载</li>
+        <li>WebSocket 实时事件推送</li>
+        <li>容器资源限制</li>
+    </ul>
+</div>
+
+<div class="diagram">
+    <strong>🚧 未来迭代</strong>
+    <ul>
+        <li>租户级别 LLM 配置覆盖</li>
+        <li>API Key / JWT 认证</li>
+        <li>上下文自动压缩（基于 token 计数）</li>
+        <li>产物过期自动清理 cron</li>
+        <li>容器安全加固（seccomp, gVisor）</li>
+    </ul>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统架构设计</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#58a6ff;--code-bg:#1a1e24;--accent:#f0883e;--green:#3fb950;--red:#f85149;--purple:#bc8cff}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:20px 40px}
+h1{color:var(--heading);font-size:2em;margin:40px 0 20px;border-bottom:1px solid var(--border);padding-bottom:10px}
+h2{color:var(--heading);font-size:1.4em;margin:30px 0 15px;padding-left:15px;border-left:3px solid var(--accent)}
+h3{color:var(--accent);font-size:1.1em;margin:20px 0 10px}
+h4{color:var(--purple);font-size:1em;margin:15px 0 8px}
+p,li{margin:8px 0}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.9em}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:15px 0}
+pre code{background:none;padding:0;font-size:0.85em;line-height:1.5}
+table{width:100%;border-collapse:collapse;margin:15px 0}
+th{background:var(--surface);color:var(--heading);text-align:left;padding:10px 12px;border:1px solid var(--border)}
+td{padding:8px 12px;border:1px solid var(--border)}
+tr:nth-child(even){background:var(--surface)}
+.note{background:var(--surface);border-left:3px solid var(--green);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.diagram{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:20px;margin:15px 0;font-family:monospace;white-space:pre;overflow-x:auto;color:var(--green);font-size:0.85em;line-height:1.4}
+.section{margin:40px 0}
+.box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin:15px 0}
+</style>
+</head>
+<body>
+
+<h1>🐝 Agent Swarm 系统架构设计</h1>
+<p>v1.0 — Orchestrator-Worker 模式，Docker 容器沙箱，A2A 通信协议</p>
+
+<div class="section">
+<h2>1. 系统全局视图</h2>
+<div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│                        DGX Spark Host                               │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────┐      │
+│  │                   FastAPI Server (:8000)                   │      │
+│  │  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐    │      │
+│  │  │ REST API  │  │  WebSocket  │  │  Static/Download │    │      │
+│  │  │ /api/chat │  │  /ws/tasks  │  │  /api/download   │    │      │
+│  │  └─────┬─────┘  └──────┬───────┘  └────────┬──────────┘    │      │
+│  │        │               │                    │               │      │
+│  │        ▼               ▼                    │               │      │
+│  │  ┌─────────────────────────────────────────────────────┐   │      │
+│  │  │              Task Manager (任务管理器)                │   │      │
+│  │  │  - 任务创建/状态跟踪/生命周期管理                      │   │      │
+│  │  │  - WebSocket 事件广播                                │   │      │
+│  │  │  - 产物收集与分发                                    │   │      │
+│  │  └────────────────────┬────────────────────────────────┘   │      │
+│  │                       │                                     │      │
+│  │                       ▼                                     │      │
+│  │  ┌─────────────────────────────────────────────────────┐   │      │
+│  │  │         Orchestrator Agent (编排 Agent)             │   │      │
+│  │  │  - 分析用户请求，拆解为子任务                          │   │      │
+│  │  │  - 选择合适的 Worker Agent 类型                      │   │      │
+│  │  │  - 通过 A2A 协议向 Worker 发送任务                    │   │      │
+│  │  │  - 监控进度，汇总结果，返回用户                       │   │      │
+│  │  └────────────────────┬────────────────────────────────┘   │      │
+│  └───────────────────────┼────────────────────────────────────┘  │
+│                          │                                        │
+│                          │ A2A (JSON-RPC 2.0 over HTTP)          │
+│                          │                                        │
+│  ┌───────────────────────┼────────────────────────────────────┐  │
+│  │              Container Pool Manager                       │  │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐   │  │
+│  │  │ Cntnr 1 │  │ Cntnr 2 │  │ Cntnr 3 │  │ Cntnr 4 │   │  │
+│  │  │ (idle)  │  │ (busy)  │  │ (idle)  │  │ (busy)  │   │  │
+│  │  │ Pool:5  │  │         │  │         │  │         │   │  │
+│  │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘   │  │
+│  └───────┼────────────┼────────────┼────────────┼────────┘  │
+│          │            │            │            │             │
+│  ┌───────▼────────────▼────────────▼────────────▼────────┐  │
+│  │            Docker Network: swarm-net                     │  │
+│  │  ┌──────────────┐  ┌──────────────┐                    │  │
+│  │  │ Worker Agent  │  │ Worker Agent  │  ... (up to 5)   │  │
+│  │  │ (frontend)    │  │ (backend)     │                    │  │
+│  │  │ Port 9001     │  │ Port 9002     │                    │  │
+│  │  │ A2A Server    │  │ A2A Server    │                    │  │
+│  │  │ Skills/MCP    │  │ Skills/MCP    │                    │  │
+│  │  └──────────────┘  └──────────────┘                    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │            Shared Volume: /shared_output               │  │
+│  │  tenants/{tenant_id}/tasks/{task_id}/                 │  │
+│  │    ├── frontend/  (前端 Agent 产出)                     │  │
+│  │    ├── backend/   (后端 Agent 产出)                     │  │
+│  │    └── artifacts/ (最终产物)                            │  │
+│  └──────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+</div>
+</div>
+
+<div class="section">
+<h2>2. 核心组件</h2>
+
+<h3>2.1 FastAPI Server（API 层）</h3>
+<table>
+<tr><th>端点</th><th>方法</th><th>功能</th></tr>
+<tr><td><code>/api/chat</code></td><td>POST</td><td>接收用户消息，创建任务，启动编排流程</td></tr>
+<tr><td><code>/ws/tasks/{task_id}</code></td><td>WebSocket</td><td>实时推送 Agent 执行事件</td></tr>
+<tr><td><code>/api/tasks/{task_id}</code></td><td>GET</td><td>查询任务状态和结果</td></tr>
+<tr><td><code>/api/tasks/{task_id}/artifacts</code></td><td>GET</td><td>列出任务产物</td></tr>
+<tr><td><code>/api/tasks/{task_id}/download</code></td><td>GET</td><td>下载产物压缩包</td></tr>
+<tr><td><code>/api/agents</code></td><td>GET</td><td>列出可用 Agent 类型（AgentCard）</td></tr>
+<tr><td><code>/api/health</code></td><td>GET</td><td>健康检查（含容器池状态）</td></tr>
+</table>
+
+<h3>2.2 Task Manager（任务管理器）</h3>
+<ul>
+<li>每个用户请求创建一个 Task，分配唯一 <code>task_id</code></li>
+<li>维护任务状态机：<code>created → running → completed/failed</code></li>
+<li>管理 WebSocket 连接池，广播事件到订阅者</li>
+<li>任务完成后收集产物，提供下载接口</li>
+<li>多租户隔离：通过 <code>tenant_id</code> 区分不同用户的任务和产物</li>
+</ul>
+
+<h3>2.3 Orchestrator Agent（编排 Agent）</h3>
+<ul>
+<li>使用 Google ADK <code>Agent</code> 类 + OpenAI-compatible LLM（GLM Coding Plan）</li>
+<li>System Prompt 定义编排策略：分析任务 → 选择 Agent → 分配 → 监控 → 汇总</li>
+<li>工具：通过 A2A Client 向 Worker Agent 发送消息</li>
+<li>工具：读取共享目录中的产物和日志</li>
+<li>工具：创建 AgentCard 描述的 Worker（触发容器池分配）</li>
+<li>上下文自动管理：ADK 内置（自动摘要、过滤不相关事件）</li>
+</ul>
+
+<h3>2.4 Worker Agent（工作 Agent）</h3>
+<ul>
+<li>每个 Worker 运行在独立的 Docker 容器中</li>
+<li>使用 <code>a2a-sdk</code> 提供 A2A Server 端点（<code>message/send</code>, <code>tasks/get</code>）</li>
+<li>使用 <code>a2a-sdk</code> 的 <code>AgentCard</code> 声明自身技能</li>
+<li>AgentCard 预配置在镜像中，包含支持的模型列表和技能描述</li>
+<li>启动时从环境变量读取：模型选择、API key、端口、任务信息</li>
+<li>产出写入 <code>/workspace/artifacts/{agent_role}/</code>（挂载的共享卷）</li>
+<li>ADK 自动管理上下文：仅当前任务相关的记忆</li>
+</ul>
+
+<h3>2.5 Container Pool Manager（容器池管理器）</h3>
+<ul>
+<li>启动时预创建 N 个容器（默认 5），保持 warm 状态</li>
+<li>异步 checkout/return 机制，带信号量限流</li>
+<li>分配时根据 AgentCard 选择合适的容器，注入配置（模型、API key）</li>
+<li>容器使用计数，超过阈值（50 次）自动回收重建</li>
+<li>共享 Volume 挂载：所有容器共享产物目录</li>
+<li>Docker 网络隔离：自定义 bridge 网络 <code>swarm-net</code></li>
+</ul>
+
+<h3>2.6 Shared Volume（共享存储）</h3>
+<pre>/shared_output/
+├── tenants/{tenant_id}/
+│   └── tasks/{task_id}/
+│       ├── frontend/     # 前端 Agent 工作目录
+│       ├── backend/      # 后端 Agent 工作目录
+│       └── _final/       # Orchestrator 汇总后的最终产物
+</pre>
+</div>
+
+<div class="section">
+<h2>3. 数据流</h2>
+<div class="diagram">
+[用户] --POST /api/chat--> [FastAPI]
+                              │
+                              ▼
+                        [Task Manager]
+                        创建 task_id
+                        创建共享目录
+                              │
+                              ▼
+                        [Orchestrator]
+                        (ADK Agent, GLM Coding Plan)
+                              │
+                    ┌─────────┼─────────┐
+                    ▼         ▼         ▼
+              [Container Pool]
+              checkout(idle) → 注入配置
+                    │
+                    ▼
+              [Worker Container 1: Frontend Agent]
+              Port 9001, A2A Server
+              写入 /workspace/artifacts/frontend/
+                    │
+                    ▼
+              [Worker Container 2: Backend Agent]
+              Port 9002, A2A Server
+              写入 /workspace/artifacts/backend/
+                    │
+                    ▼ (Orchestrator 通过 A2A 轮询/流式获取状态)
+                        │
+                        ▼
+                  [Orchestrator 汇总]
+                  读取产物，生成总结
+                  写入 _final/
+                        │
+                        ▼
+                  [Task Manager]
+                  通知 WebSocket 客户端
+                  提供下载链接
+</div>
+</div>
+
+<div class="section">
+<h2>4. 预启动容器池设计</h2>
+
+<h3>4.1 容器镜像</h3>
+<p>单一镜像 <code>swarm-worker:latest</code>，包含：</p>
+<ul>
+<li>Python 3.13 + Google ADK + a2a-sdk + OpenAI SDK</li>
+<li>所有预定义的 AgentCard（frontend, backend, general, 等）</li>
+<li>Skills 模板和 MCP 客户端</li>
+<li>A2A Server 入口脚本</li>
+</ul>
+
+<h3>4.2 启动流程</h3>
+<div class="diagram">
+[系统启动]
+     │
+     ▼
+[构建/拉取镜像 swarm-worker:latest]
+     │
+     ▼
+[创建 Docker 网络 swarm-net]
+     │
+     ▼
+[预启动 5 个容器] ← 全部 detach, waiting 状态
+     │  容器内部运行一个等待脚本：
+     │  "等待 /etc/swarm/config.json 写入后启动 A2A Server"
+     ▼
+[Container Pool Ready]
+     │
+     ▼
+[收到任务] → [选择 AgentCard] → [找到 idle 容器]
+     │
+     ▼
+[写入 /etc/swarm/config.json] (模型、API key、角色、端口)
+     │
+     ▼
+[容器内部检测到配置] → [启动 A2A Server on assigned port]
+     │
+     ▼
+[Container 注册到 Pool Manager] → [A2A 可通信]
+     │
+     ▼
+[任务完成] → [容器归池] → [清理工作目录] → [回到 waiting 状态]
+</div>
+
+<h3>4.3 Config JSON 格式</h3>
+<pre><code>{
+  "task_id": "uuid-xxx",
+  "tenant_id": "tenant-xxx",
+  "agent_role": "frontend",
+  "agent_card_id": "frontend-ux-pro",
+  "model": "glm-coding-plan",
+  "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+  "api_key": "sk-xxx",
+  "port": 9001,
+  "shared_dir": "/workspace/artifacts",
+  "orchestrator_url": "http://host.docker.internal:8000/a2a/orchestrator"
+}</code></pre>
+
+</div>
+
+<div class="section">
+<h2>5. A2A 通信设计</h2>
+
+<h3>5.1 AgentCard 示例</h3>
+<pre><code># Frontend Agent
+{
+  "name": "Frontend UX Pro",
+  "url": "http://worker-1:9001",
+  "version": "1.0.0",
+  "description": "专业前端开发 Agent，擅长 UI/UX 设计和 React/Vue 实现",
+  "skills": [
+    {
+      "id": "frontend-dev",
+      "name": "Frontend Development",
+      "description": "开发响应式前端应用，支持 React/Vue/HTML+CSS+JS",
+      "tags": ["frontend", "react", "vue", "ui", "ux", "css"]
+    },
+    {
+      "id": "ui-review",
+      "name": "UI/UX Review",
+      "description": "审查 UI 设计，提供改进建议",
+      "tags": ["design", "review", "accessibility"]
+    }
+  ],
+  "capabilities": {"streaming": true}
+}
+
+# Backend Agent
+{
+  "name": "Backend Engineer",
+  "url": "http://worker-2:9002",
+  "version": "1.0.0",
+  "description": "专业后端开发 Agent，擅长 API 设计和数据库操作",
+  "skills": [
+    {
+      "id": "backend-dev",
+      "name": "Backend Development",
+      "description": "开发 RESTful API、数据库设计、服务端逻辑",
+      "tags": ["backend", "api", "database", "python", "node"]
+    }
+  ],
+  "capabilities": {"streaming": true}
+}</code></pre>
+
+<h3>5.2 通信流程</h3>
+<div class="diagram">
+1. Orchestrator → GET http://worker-1:9001/.well-known/agent.json
+   ← AgentCard (确认这是 Frontend Agent)
+
+2. Orchestrator → POST http://worker-1:9001/
+   {
+     "jsonrpc": "2.0",
+     "method": "message/send",
+     "params": {
+       "message": {
+         "role": "user",
+         "parts": [{"kind": "text", "text": "请实现登录页面的前端代码..."}]
+       }
+     }
+   }
+   ← {"jsonrpc": "2.0", "result": {"id": "task-xxx", "status": {"state": "working"}}}
+
+3. Orchestrator → GET http://worker-1:9001/ (tasks/get)
+   ← {"status": {"state": "completed"}, "artifacts": [...]}
+
+4. Orchestrator 读取共享目录产物，继续编排或汇总
+</div>
+
+</div>
+
+<div class="section">
+<h2>6. 多租户设计</h2>
+
+<h3>6.1 隔离维度</h3>
+<table>
+<tr><th>维度</th><th>策略</th><th>实现</th></tr>
+<tr><td>存储</td><td>目录隔离</td><td><code>/shared_output/tenants/{id}/tasks/{id}/</code></td></tr>
+<tr><td>凭证</td><td>注入隔离</td><td>容器启动时注入 tenant 的 API key</td></tr>
+<tr><td>上下文</td><td>任务隔离</td><td>每个 task_id 独立 session</td></tr>
+<tr><td>产物</td><td>访问控制</td><td>API 校验 tenant_id 后允许下载</td></tr>
+<tr><td>并发</td><td>容器池共享</td><td>所有租户共享容器池，通过 task_id 隔离</td></tr>
+</table>
+
+<h3>6.2 产物交付流程</h3>
+<div class="diagram">
+用户 A: tenant-aaa, task-001
+  → POST /api/chat → 创建任务
+  → Worker Agent 写入 /shared_output/tenants/tenant-aaa/tasks/task-001/
+  → GET /api/tasks/task-001/download → 校验 tenant-aaa 权限
+  → 返回 task-001 目录的 zip 包
+
+用户 B: tenant-bbb, task-002
+  → 完全独立的目录和产物
+  → 只能访问自己的产物
+
+管理视角:
+  → GET /api/tenants → 列出所有租户
+  → GET /api/tenants/{id}/tasks → 列出租户所有任务
+</div>
+
+<h3>6.3 上下文管理策略</h3>
+<ul>
+<li><strong>任务级隔离</strong>：每个 task_id 有独立的 ADK Session</li>
+<li><strong>自动压缩</strong>：ADK 自动摘要历史对话，保持上下文窗口可用</li>
+<li><strong>任务完成清理</strong>：任务结束后，可配置保留时间，超时自动清理</li>
+<li><strong>Orchestrator 轻量化</strong>：Orchestrator 不携带 Worker 的执行细节，仅记录关键决策和结果摘要</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>7. 技术栈</h2>
+<table>
+<tr><th>组件</th><th>技术</th><th>版本</th></tr>
+<tr><td>Agent 框架</td><td>Google ADK</td><td>v2.2.0+</td></tr>
+<tr><td>A2A 协议</td><td>a2a-sdk (Python)</td><td>latest</td></tr>
+<tr><td>LLM</td><td>GLM Coding Plan (OpenAI-compatible)</td><td>-</td></tr>
+<tr><td>API 入口</td><td>FastAPI + Uvicorn</td><td>latest</td></tr>
+<tr><td>容器</td><td>Docker + docker-py</td><td>29.x</td></tr>
+<tr><td>HTTP 客户端</td><td>httpx (async)</td><td>latest</td></tr>
+<tr><td>数据验证</td><td>Pydantic v2</td><td>2.x</td></tr>
+<tr><td>测试</td><td>pytest + pytest-asyncio</td><td>-</td></tr>
+<tr><td>Python</td><td>3.13+</td><td>-</td></tr>
+</table>
+</div>
+
+<div class="section">
+<h2>8. 项目目录结构</h2>
+<pre>swarm/
+├── docs/                      # 文档
+│   └── index.html             # 文档索引
+├── research/                  # 调研文档
+├── design/                    # 设计文档
+├── src/
+│   ├── __init__.py
+│   ├── main.py               # FastAPI 入口
+│   ├── config.py             # 全局配置
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── routes.py         # REST 路由
+│   │   ├── websocket.py      # WebSocket 管理
+│   │   └── models.py         # Pydantic 模型
+│   ├── task_manager/
+│   │   ├── __init__.py
+│   │   └── manager.py        # 任务生命周期管理
+│   ├── orchestrator/
+│   │   ├── __init__.py
+│   │   ├── agent.py          # Orchestrator Agent 定义
+│   │   └── tools.py          # Orchestrator 专用工具
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   ├── worker.py         # Worker Agent 通用模板
+│   │   ├── agent_cards.py    # AgentCard 定义
+│   │   └── skills.py         # Skills 定义
+│   ├── container_pool/
+│   │   ├── __init__.py
+│   │   ├── pool.py           # 容器池核心
+│   │   └── config.py         # 容器配置注入
+│   └── common/
+│       ├── __init__.py
+│       └── a2a_client.py     # A2A 客户端封装
+├── docker/
+│   ├── Dockerfile.worker     # Worker 镜像
+│   └── entrypoint.sh         # Worker 入口脚本
+├── tests/
+│   ├── test_api.py
+│   ├── test_container_pool.py
+│   ├── test_orchestrator.py
+│   └── test_a2a.py
+├── config/
+│   └── default.yaml           # 默认配置
+├── shared_output/             # 共享产物
+├── pyproject.toml
+└── README.md</pre>
+</div>
+
+<footer style="margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#666;font-size:0.85em">
+<p>设计日期：2026-06-13 | 版本：v1.0</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装依赖（requirements.txt 在 build context 根目录）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制 Agent 代码
+COPY src/agents/ /app/agents/
+
+# 复制入口脚本
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# 创建配置目录
+RUN mkdir -p /etc/swarm /workspace/artifacts
+
+EXPOSE 9001
+
+ENTRYPOINT ["/app/entrypoint.sh"]

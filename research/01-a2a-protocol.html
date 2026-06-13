@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A2A 协议调研报告</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#58a6ff;--code-bg:#1a1e24;--accent:#f0883e;--green:#3fb950}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:20px 40px}
+h1{color:var(--heading);font-size:2em;margin:40px 0 20px;border-bottom:1px solid var(--border);padding-bottom:10px}
+h2{color:var(--heading);font-size:1.4em;margin:30px 0 15px;cursor:pointer;padding-left:15px;border-left:3px solid var(--accent)}
+h3{color:var(--accent);font-size:1.1em;margin:20px 0 10px}
+p,li{margin:8px 0}
+a{color:var(--heading);text-decoration:none}
+a:hover{text-decoration:underline}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.9em}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:15px 0}
+pre code{background:none;padding:0;font-size:0.85em;line-height:1.5}
+table{width:100%;border-collapse:collapse;margin:15px 0}
+th{background:var(--surface);color:var(--heading);text-align:left;padding:10px 12px;border:1px solid var(--border)}
+td{padding:8px 12px;border:1px solid var(--border)}
+tr:nth-child(even){background:var(--surface)}
+.note{background:var(--surface);border-left:3px solid var(--green);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.75em;background:var(--accent);color:#000;font-weight:bold}
+nav{position:fixed;left:0;top:0;width:240px;height:100vh;background:var(--surface);border-right:1px solid var(--border);padding:20px 15px;overflow-y:auto}
+nav a{display:block;padding:6px 10px;color:var(--text);text-decoration:none;border-radius:4px;margin:2px 0;font-size:0.9em}
+nav a:hover,nav a.active{background:var(--border);color:var(--heading)}
+nav h3{color:var(--heading);font-size:0.95em;margin:15px 0 5px}
+main{margin-left:260px;max-width:900px;padding:20px 30px 80px}
+@media(max-width:900px){nav{display:none}main{margin-left:0}}
+.diagram{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:20px;margin:15px 0;font-family:monospace;white-space:pre;overflow-x:auto;color:var(--green);font-size:0.9em}
+</style>
+</head>
+<body>
+<nav>
+<h3>目录</h3>
+<a href="#overview">1. 协议概览</a>
+<a href="#transport">2. 传输层</a>
+<a href="#agentcard">3. Agent 发现 & AgentCard</a>
+<a href="#task">4. Task 模型</a>
+<a href="#message">5. 消息格式</a>
+<a href="#operations">6. 核心操作</a>
+<a href="#patterns">7. 通信模式</a>
+<a href="#errors">8. 错误码</a>
+<a href="#a2a-vs-mcp">9. A2A vs MCP</a>
+<a href="#sdks">10. SDK & 实现</a>
+</nav>
+<main>
+
+<h1>A2A (Agent-to-Agent) 协议调研报告</h1>
+<p><span class="badge">v1.0.0</span> 开放标准 · Apache 2.0 · Linux Foundation 管理 · 150+ 组织生产使用</p>
+
+<h2 id="overview">1. 协议概览</h2>
+<p>A2A 是由 Google 发起并捐赠给 Linux Foundation 的开放标准，用于 AI Agent 之间的通信和互操作。<strong>核心原则：Agent 之间基于声明的能力交换信息，不共享内部状态、记忆或工具。</strong></p>
+
+<div class="diagram">┌─────────────────────────────────────────────────┐
+│           Layer 1: Canonical Data Model          │
+│    Task, Message, AgentCard, Part, Artifact       │
+├─────────────────────────────────────────────────┤
+│           Layer 2: Abstract Operations           │
+│    Send Message, Get Task, Cancel Task, ...        │
+├─────────────────────────────────────────────────┤
+│           Layer 3: Protocol Bindings             │
+│    JSON-RPC 2.0  |  gRPC  |  HTTP+JSON/REST      │
+└─────────────────────────────────────────────────┘</div>
+
+<h3>规范来源</h3>
+<p>规范定义文件：<code>spec/a2a.proto</code> 是唯一权威定义，所有 SDK 必须从 proto 文件重新生成。</p>
+
+<h2 id="transport">2. 传输层</h2>
+<table>
+<tr><th>组件</th><th>技术</th><th>说明</th></tr>
+<tr><td>传输</td><td>HTTP/HTTPS</td><td>标准 HTTP 协议</td></tr>
+<tr><td>数据交换</td><td>JSON-RPC 2.0</td><td>请求/响应封装格式</td></tr>
+<tr><td>流式传输</td><td>Server-Sent Events (SSE)</td><td>实时推送任务状态</td></tr>
+<tr><td>认证</td><td>HTTP Headers</td><td>带外凭证交换，遵循 OpenAPI 规范</td></tr>
+</table>
+
+<h2 id="agentcard">3. Agent 发现 & AgentCard</h2>
+
+<h3>发现机制</h3>
+<ol>
+<li><strong>Well-known 端点</strong>：<code>https://&lt;base_url&gt;/.well-known/agent.json</code></li>
+<li><strong>Agent 注册中心</strong>：公共或私有注册表索引 AgentCard</li>
+<li><strong>去中心化发现</strong>：P2P 网络、IPFS、区块链（未来）</li>
+</ol>
+
+<h3>AgentCard 完整结构</h3>
+<pre><code>interface AgentCard {
+  // 基本信息
+  name: string;                    // "Recipe Agent"
+  description: string;             // 人类可读描述
+  url: string;                     // Agent 服务 URL
+  version: string;                 // "1.0.0"
+  protocolVersion?: string;        // "1.0.0"
+  documentationUrl?: string;
+
+  provider?: {
+    organization: string;
+    url?: string;
+  };
+
+  // 能力声明
+  capabilities: {
+    streaming?: boolean;                // 支持 SSE 流式
+    pushNotifications?: boolean;         // 支持 Webhook 推送
+    stateTransitionHistory?: boolean;    // 暴露状态变更历史
+    extendedAgentCard?: boolean;         // 支持认证扩展卡片
+  };
+
+  // 认证 (OpenAPI 风格)
+  security?: string[][];
+  securitySchemes?: Record&lt;string, SecurityScheme&gt;;
+
+  // 交互模式
+  defaultInputModes: string[];        // ["text/plain"]
+  defaultOutputModes: string[];       // ["text/plain"]
+
+  // 技能列表
+  skills: AgentSkill[];
+}
+
+interface AgentSkill {
+  id: string;              // 唯一标识
+  name: string;            // 技能名称
+  description: string;     // 技能描述
+  tags: string[];          // 分类标签
+  examples?: string[];      // 示例场景
+  inputModes?: string[];
+  outputModes?: string[];
+}</code></pre>
+
+<h3>安全方案类型</h3>
+<table>
+<tr><th>类型</th><th>关键字段</th></tr>
+<tr><td>apiKey</td><td>name, in_ (header/query/cookie)</td></tr>
+<tr><td>http</td><td>scheme (Basic/Bearer), bearerFormat</td></tr>
+<tr><td>oauth2</td><td>flows (implicit/password/clientCredentials/authorizationCode)</td></tr>
+<tr><td>openIdConnect</td><td>openIdConnectUrl</td></tr>
+</table>
+
+<h3>Extended Agent Card</h3>
+<p>需要认证的扩展卡片，端点：<code>GET /a2a/agent/authenticatedExtendedCard</code>，返回包含额外技能/能力的详细卡片。</p>
+
+<h2 id="task">4. Task 模型</h2>
+
+<pre><code>interface Task {
+  id: string;                       // UUID
+  contextId: string;                // 关联相关 tasks/messages
+  status: TaskStatus;               // 当前状态
+  kind: 'task';
+  history?: Message[];               // 对话历史
+  artifacts?: Artifact[];           // 产出
+  metadata?: Record&lt;string, any&gt;;
+}
+
+interface Artifact {
+  artifactId: string;
+  name: string;
+  parts: Part[];
+  metadata?: Record&lt;string, any&gt;;
+}</code></pre>
+
+<h3>TaskState 枚举（9 种状态）</h3>
+<table>
+<tr><th>状态</th><th>说明</th></tr>
+<tr><td><code>submitted</code></td><td>任务已接收，尚未开始</td></tr>
+<tr><td><code>working</code></td><td>任务进行中</td></tr>
+<tr><td><code>input-required</code></td><td>Agent 需要更多信息（human-in-the-loop）</td></tr>
+<tr><td><code>completed</code></td><td>任务成功完成</td></tr>
+<tr><td><code>canceled</code></td><td>任务被取消</td></tr>
+<tr><td><code>failed</code></td><td>任务执行失败</td></tr>
+<tr><td><code>rejected</code></td><td>任务被拒绝</td></tr>
+<tr><td><code>auth-required</code></td><td>需要认证凭据</td></tr>
+<tr><td><code>unknown</code></td><td>未识别状态</td></tr>
+</table>
+
+<div class="diagram">         submitted
+             │
+             ▼
+          working
+        ╱    │    ╲
+       ▼     ▼     ▼
+  completed failed canceled
+       │
+       ▼
+  input-required ──→ working ──→ ...
+  
+  rejected / auth-required (异常分支)</div>
+
+<h3>Task 更新机制（3 种）</h3>
+<table>
+<tr><th>机制</th><th>适用场景</th><th>要求</th></tr>
+<tr><td>轮询 (<code>tasks/get</code>)</td><td>简单集成、防火墙环境</td><td>无</td></tr>
+<tr><td>流式 (SSE)</td><td>交互式应用、实时仪表盘</td><td>streaming: true</td></tr>
+<tr><td>推送通知 (Webhooks)</td><td>Server-to-server、长任务</td><td>pushNotifications: true</td></tr>
+</table>
+
+<h2 id="message">5. 消息格式</h2>
+
+<pre><code>interface Message {
+  messageId: string;           // UUID
+  role: 'user' | 'agent';
+  parts: Part[];               // 内容部分
+  kind?: 'message';
+  taskId?: string;
+  contextId?: string;
+  referenceTaskIds?: string[];  // 跨任务引用
+  metadata?: Record&lt;string, any&gt;;
+}
+
+// Part — 联合类型（最小内容单元）
+type Part = TextPart | FilePart | DataPart;
+
+interface TextPart {
+  kind: 'text';
+  text: string;
+}
+
+interface FilePart {
+  kind: 'file';
+  file: FileWithBytes | FileWithUri;
+}
+
+interface DataPart {
+  kind: 'data';
+  data: Record&lt;string, any&gt;;   // 结构化 JSON 数据
+}</code></pre>
+
+<h3>JSON-RPC 2.0 封装</h3>
+<pre><code>// 请求
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "message/send",
+  "params": {
+    "message": { "role": "user", "parts": [...], "messageId": "..." },
+    "metadata": {},
+    "configuration": { "blocking": true }
+  }
+}
+
+// 成功响应
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": { /* Task 或 Message */ }
+}
+
+// 错误响应
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": { "code": -32001, "message": "Task not found", "data": {} }
+}</code></pre>
+
+<h2 id="operations">6. 核心操作（11 个）</h2>
+<table>
+<tr><th>#</th><th>操作</th><th>JSON-RPC Method</th><th>说明</th></tr>
+<tr><td>1</td><td>Send Message</td><td><code>message/send</code></td><td>主要交互方式，发送消息给 Agent</td></tr>
+<tr><td>2</td><td>Send Streaming Message</td><td><code>message/stream</code></td><td>SSE 流式实时更新</td></tr>
+<tr><td>3</td><td>Get Task</td><td><code>tasks/get</code></td><td>轮询任务状态</td></tr>
+<tr><td>4</td><td>List Tasks</td><td><code>tasks/list</code></td><td>游标分页列举任务</td></tr>
+<tr><td>5</td><td>Cancel Task</td><td><code>tasks/cancel</code></td><td>幂等取消</td></tr>
+<tr><td>6</td><td>Subscribe to Task</td><td><code>tasks/subscribe</code></td><td>SSE 订阅任务更新</td></tr>
+<tr><td>7</td><td>Create Push Notification</td><td><code>tasks/pushNotification/create</code></td><td>注册 Webhook</td></tr>
+<tr><td>8</td><td>Get Push Notification</td><td><code>tasks/pushNotification/get</code></td><td>获取 Webhook 配置</td></tr>
+<tr><td>9</td><td>List Push Notifications</td><td><code>tasks/pushNotification/list</code></td><td>列举所有 Webhook</td></tr>
+<tr><td>10</td><td>Delete Push Notification</td><td><code>tasks/pushNotification/delete</code></td><td>移除 Webhook</td></tr>
+<tr><td>11</td><td>Get Extended Card</td><td>HTTP GET</td><td>获取认证扩展 AgentCard</td></tr>
+</table>
+
+<h2 id="patterns">7. 通信模式</h2>
+
+<h3>模式 1：同步阻塞</h3>
+<div class="diagram">Client → message/send (blocking: true) → Server 处理 → 返回完成的 Task/Message</div>
+
+<h3>模式 2：同步 + 轮询（非阻塞）</h3>
+<div class="diagram">Client → message/send (blocking: false) → 返回 "working" 状态 Task
+Client → tasks/get (重复) → 更新状态
+Client → tasks/get → 返回 "completed" 状态</div>
+
+<h3>模式 3：流式 SSE</h3>
+<div class="diagram">Client → message/stream → SSE 事件流:
+  1. TaskStatusUpdateEvent (state: "submitted")
+  2. TaskArtifactUpdateEvent (append: false) — 首个分块
+  3. TaskArtifactUpdateEvent (append: true) — 后续分块
+  4. TaskStatusUpdateEvent (state: "completed", final: true)</div>
+
+<h3>模式 4：推送通知（Webhooks）</h3>
+<div class="diagram">Client → message/send + pushNotificationConfig → 返回 Task
+Server → POST StreamResponse 到 Webhook URL
+  - Authorization header
+  - X-A2A-Notification-Token header</div>
+
+<h3>模式 5：多轮交互（Human-in-the-Loop）</h3>
+<div class="diagram">Client → message/send → Task (status: "input-required" + Agent 提问)
+Client → message/send (同 taskId, contextId) → 继续
+... 循环直到 completed</div>
+
+<h2 id="errors">8. 错误码</h2>
+<table>
+<tr><th>Code</th><th>Error</th><th>说明</th></tr>
+<tr><td>-32700</td><td>JSONParseError</td><td>无效 JSON</td></tr>
+<tr><td>-32600</td><td>InvalidRequestError</td><td>不合规请求</td></tr>
+<tr><td>-32601</td><td>MethodNotFoundError</td><td>未知方法</td></tr>
+<tr><td>-32602</td><td>InvalidParamsError</td><td>错误参数</td></tr>
+<tr><td>-32603</td><td>InternalError</td><td>服务器错误</td></tr>
+<tr><td>-32001</td><td>TaskNotFoundError</td><td>Task ID 不存在</td></tr>
+<tr><td>-32002</td><td>TaskNotCancelableError</td><td>任务不可取消</td></tr>
+<tr><td>-32003</td><td>PushNotificationNotSupported</td><td>不支持推送</td></tr>
+<tr><td>-32004</td><td>UnsupportedOperationError</td><td>不支持的操作</td></tr>
+<tr><td>-32005</td><td>ContentTypeNotSupportedError</td><td>不支持的内容类型</td></tr>
+</table>
+
+<h2 id="a2a-vs-mcp">9. A2A vs MCP</h2>
+<table>
+<tr><th>方面</th><th>MCP (Model Context Protocol)</th><th>A2A (Agent-to-Agent)</th></tr>
+<tr><td>用途</td><td>Agent ↔ 工具/资源</td><td>Agent ↔ Agent</td></tr>
+<tr><td>连接对象</td><td>数据库、API、函数</td><td>其他自主 Agent</td></tr>
+<tr><td>交互风格</td><td>结构化、通常无状态</td><td>有状态、对话式、协作</td></tr>
+<tr><td>发现</td><td>工具描述（类函数调用）</td><td>AgentCard (well-known 端点)</td></tr>
+<tr><td>协议</td><td>JSON-RPC over stdio/SSE/HTTP</td><td>JSON-RPC 2.0 over HTTP(S) + SSE</td></tr>
+<tr><td>Task 管理</td><td>无原生 Task 模型</td><td>完整 Task 生命周期（9 状态）</td></tr>
+<tr><td>创建者</td><td>Anthropic</td><td>Google → Linux Foundation</td></tr>
+</table>
+
+<div class="note">
+<strong>它们是互补的！</strong><br>
+User → [A2A] → Agent A → [A2A] → Agent B → [MCP] → Database<br>
+Agent 使用 <strong>A2A 与其他 Agent 通信</strong>，使用 <strong>MCP 调用自己的工具</strong>。
+</div>
+
+<h2 id="sdks">10. SDK & 参考实现</h2>
+
+<h3>官方 SDK</h3>
+<table>
+<tr><th>语言</th><th>仓库</th><th>安装</th></tr>
+<tr><td>Python</td><td><a href="https://github.com/a2aproject/a2a-python">a2aproject/a2a-python</a></td><td><code>pip install a2a-sdk</code></td></tr>
+<tr><td>JavaScript</td><td><a href="https://github.com/a2aproject/a2a-js">a2aproject/a2a-js</a></td><td><code>npm install @a2a-js/sdk</code></td></tr>
+<tr><td>Java</td><td><a href="https://github.com/a2aproject/a2a-java">a2aproject/a2a-java</a></td><td>Maven</td></tr>
+<tr><td>C#</td><td><a href="https://github.com/a2aproject/a2a-dotnet">a2aproject/a2a-dotnet</a></td><td>dotnet add package A2A</td></tr>
+<tr><td>Go</td><td><a href="https://github.com/a2aproject/a2a-go">a2aproject/a2a-go</a></td><td><code>go get github.com/a2aproject/a2a-go</code></td></tr>
+</table>
+
+<h3>Python SDK 示例</h3>
+<pre><code># Server 端
+from a2a.server import A2AServer
+from a2a.types import AgentCard, AgentSkill
+
+agent_card = AgentCard(
+    name="My Agent",
+    description="A sample A2A agent",
+    url="http://localhost:9999",
+    version="1.0.0",
+    skills=[AgentSkill(id="chat", name="Chat", description="Chat capability", tags=["chat"])],
+    capabilities=AgentCapabilities(streaming=True),
+    defaultInputModes=["text/plain"],
+    defaultOutputModes=["text/plain"],
+)
+
+server = A2AServer(my_agent_executor, agent_card=agent_card)
+server.start()
+
+# Client 端
+from a2a.client import A2AClient
+client = A2AClient("http://localhost:9999")
+result = await client.send_message(
+    message=Message(role="user", parts=[TextPart(text="Hello!")])
+)</code></pre>
+
+<h3>框架集成</h3>
+<table>
+<tr><th>框架</th><th>A2A 支持情况</th></tr>
+<tr><td>Google ADK</td><td>一等公民支持，参考实现</td></tr>
+<tr><td>LangGraph</td><td>LangSmith Agent Server 提供 A2A 端点（需 license）</td></tr>
+<tr><td>BeeAI</td><td>A2A 兼容</td></tr>
+<tr><td>CrewAI</td><td>通过 A2A 互操作</td></tr>
+<tr><td>Semantic Kernel</td><td>通过 A2A 互操作</td></tr>
+</table>
+
+<div class="note">
+<strong>Docker Agent Swarm 实现要点：</strong><br>
+1. 每个容器运行 A2A Server，在 <code>/.well-known/agent.json</code> 提供 AgentCard<br>
+2. 发现：中央注册服务 / DNS / 硬编码端点<br>
+3. 通信：容器间 JSON-RPC 2.0 over HTTP（<code>http://agent-container:9999/</code>）<br>
+4. 任务委派：<code>message/send</code> → Agent B → 返回 Task → <code>tasks/get</code> 轮询或 <code>message/stream</code> 流式<br>
+5. 每个 Agent 保持不透明：不暴露内部工具/记忆，仅声明 skills
+</div>
+
+<footer style="margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#666;font-size:0.85em">
+<p>调研日期：2026-06-13 | 来源：google.github.io/A2A, github.com/a2aproject/A2A, a2a-protocol.org</p>
+</footer>
+</main>
+</body>
+</html>

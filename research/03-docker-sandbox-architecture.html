@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 沙箱 & 多 Agent 架构调研</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#58a6ff;--code-bg:#1a1e24;--accent:#f0883e;--green:#3fb950;--red:#f85149}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.7;padding:20px 40px}
+h1{color:var(--heading);font-size:2em;margin:40px 0 20px;border-bottom:1px solid var(--border);padding-bottom:10px}
+h2{color:var(--heading);font-size:1.4em;margin:30px 0 15px;padding-left:15px;border-left:3px solid var(--accent)}
+h3{color:var(--accent);font-size:1.1em;margin:20px 0 10px}
+p,li{margin:8px 0}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-family:'Fira Code',monospace;font-size:0.9em}
+pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:15px 0}
+pre code{background:none;padding:0;font-size:0.85em;line-height:1.5}
+table{width:100%;border-collapse:collapse;margin:15px 0}
+th{background:var(--surface);color:var(--heading);text-align:left;padding:10px 12px;border:1px solid var(--border)}
+td{padding:8px 12px;border:1px solid var(--border)}
+tr:nth-child(even){background:var(--surface)}
+.note{background:var(--surface);border-left:3px solid var(--green);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.warn{background:var(--surface);border-left:3px solid var(--red);padding:12px 16px;margin:15px 0;border-radius:0 8px 8px 0}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.75em;background:var(--accent);color:#000;font-weight:bold}
+.diagram{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:20px;margin:15px 0;font-family:monospace;white-space:pre;overflow-x:auto;color:var(--green);font-size:0.9em}
+nav{position:fixed;left:0;top:0;width:240px;height:100vh;background:var(--surface);border-right:1px solid var(--border);padding:20px 15px;overflow-y:auto}
+nav a{display:block;padding:6px 10px;color:var(--text);text-decoration:none;border-radius:4px;margin:2px 0;font-size:0.9em}
+nav a:hover{background:var(--border);color:var(--heading)}
+nav h3{color:var(--heading);font-size:0.95em;margin:15px 0 5px}
+main{margin-left:260px;max-width:960px;padding:20px 30px 80px}
+@media(max-width:900px){nav{display:none}main{margin-left:0}}
+</style>
+</head>
+<body>
+<nav>
+<h3>目录</h3>
+<a href="#sandbox-patterns">1. Docker 沙箱模式</a>
+<a href="#warm-pool">2. Warm Pool 预启动</a>
+<a href="#config-injection">3. 动态配置注入</a>
+<a href="#volumes">4. Volume 挂载</a>
+<a href="#security">5. 安全加固</a>
+<a href="#isolation">6. 隔离技术对比</a>
+<a href="#swarch">7. 多 Agent 架构</a>
+<a href="#framework-compare">8. 框架对比</a>
+<a href="#multitenant">9. 多租户方案</a>
+<a href="#fastapi">10. FastAPI 入口设计</a>
+<a href="#summary">11. 总结</a>
+</nav>
+<main>
+
+<h1>Docker 沙箱 & 多 Agent 架构调研</h1>
+
+<h2 id="sandbox-patterns">1. Docker Agent 沙箱模式</h2>
+
+<h3>两种架构模式（LangChain/Harrison Chase 分类）</h3>
+
+<table>
+<tr><th>模式</th><th>说明</th><th>优缺点</th></tr>
+<tr>
+<td><strong>Pattern 1: Agent 运行在沙箱内</strong></td>
+<td>Agent runtime + tools + 执行环境都在容器内</td>
+<td>✅ 接近本地开发体验 ❌ 迭代慢（需重建镜像）❌ API key 暴露风险</td>
+</tr>
+<tr>
+<td><strong>Pattern 2: 沙箱作为工具</strong> <span class="badge">推荐</span></td>
+<td>Agent 在服务器上运行，通过 API 调用沙箱执行代码</td>
+<td>✅ 迭代快 ✅ 凭证安全 ✅ 并行沙箱 ✅ 按需付费 ❌ 网络延迟</td>
+</tr>
+</table>
+
+<div class="note">
+<strong>我们的选择：Pattern 1 变体</strong><br>
+由于我们需要环境隔离（前端/后端不同环境）且 Agent 需要长期运行，采用 Pattern 1 变体：Agent 运行在容器内，但 API key 通过安全方式注入，容器间通过 A2A 协议通信。
+</div>
+
+<h2 id="warm-pool">2. Warm Pool 预启动</h2>
+
+<h3>Jazzmine SandboxPool 模式</h3>
+<p>预启动可配置数量的容器（<code>pool_size</code>），消除 1-3 秒冷启动延迟。</p>
+
+<div class="diagram">┌─────────────────────────────────────────────────────┐
+│                    Container Pool                      │
+│  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐          │
+│  │idle │ │busy │ │idle │ │idle │ │busy │  pool=5  │
+│  └─────┘ └─────┘ └─────┘ └─────┘ └─────┘          │
+├─────────────────────────────────────────────────────┤
+│              Checkout / Return Cycle                  │
+│                                                       │
+│  checkout() →                                         │
+│    Fast Path:    返回空闲容器（立即可用）               │
+│    Overflow:    池空但 overflow 预算可用 → 新建容器     │
+│    Blocked:     信号量满 → 异步等待释放                 │
+│                                                       │
+│  return() →                                          │
+│    清理 /workspace (tmpfs RAM-disk) → 零数据泄露      │
+│    使用计数 +1，超过 50 次则回收重建                    │
+└─────────────────────────────────────────────────────┘</div>
+
+<h3>关键参数</h3>
+<table>
+<tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+<tr><td><code>pool_size</code></td><td>5</td><td>预启动容器数</td></tr>
+<tr><td><code>max_overflow</code></td><td>3</td><td>超出池容量的最大溢出数</td></tr>
+<tr><td><code>MAX_CONTAINER_USES</code></td><td>50</td><td>容器最大使用次数后回收</td></tr>
+<tr><td>Cold Start</td><td>180-500ms</td><td>Docker 容器启动时间</td></tr>
+<tr><td>Warm Hand-off</td><td>&lt;100ms</td><td>预热容器切换时间</td></tr>
+</table>
+
+<h2 id="config-injection">3. 动态配置注入</h2>
+
+<pre><code># docker-py 配置注入
+import docker
+
+client = docker.from_env()
+container = client.containers.run(
+    image="swarm-agent:latest",
+    environment={
+        "TASK_ID": task_id,
+        "AGENT_ROLE": role,           # "frontend" / "backend" / "orchestrator"
+        "LLM_MODEL": model,           # "glm-coding-plan"
+        "LLM_BASE_URL": base_url,     # "https://open.bigmodel.cn/api/coding/paas/v4"
+        "API_KEY": api_key,            # 通过 docker secrets 更安全
+    },
+    volumes={
+        "/shared/artifacts": {"bind": "/artifacts", "mode": "rw"},
+        "/config/task.json": {"bind": "/etc/task/config.json", "mode": "ro"},
+    },
+    detach=True,
+)</code></pre>
+
+<h3>注入策略对比</h3>
+<table>
+<tr><th>策略</th><th>安全性</th><th>复杂度</th></tr>
+<tr><td>环境变量</td><td>低（docker inspect 可见）</td><td>最简</td></tr>
+<tr><td>只读 bind mount 配置文件</td><td>中</td><td>中等</td></tr>
+<tr><td>Docker secrets / mounted files</td><td>高</td><td>较高</td></tr>
+<tr><td>Sidecar 注入</td><td>最高</td><td>最高</td></tr>
+</table>
+
+<h2 id="volumes">4. Volume 挂载模式</h2>
+<pre><code>volumes={
+    # 共享产物存储（Agent 间共享读写）
+    "/home/apx103/work/swarm/shared_output/{task_id}": {
+        "bind": "/workspace/artifacts", "mode": "rw"
+    },
+    # 共享库/技能（只读）
+    "/home/apx103/work/swarm/skills": {
+        "bind": "/opt/skills", "mode": "ro"
+    },
+    # tmpfs scratch space（RAM-backed，高速）
+    "sandbox-tmpfs": {"bind": "/tmp", "mode": "rw"},
+}</code></pre>
+
+<h2 id="security">5. 安全加固</h2>
+<pre><code>container = client.containers.run(
+    image="swarm-agent:latest",
+    nano_cpus=int(0.5 * 1e9),        # CPU 限制
+    mem_limit="512m",                  # 内存限制
+    memswap_limit="512m",             # 禁用 swap
+    read_only=True,                    # 只读文件系统
+    tmpfs={"/tmp": "size=100m"},       # 可写 tmp
+    security_opt=["no-new-privileges", "seccomp=default"],
+    cap_drop=["ALL"],                  # 丢弃所有 capability
+    user="nobody",                     # 非特权用户
+    pids_limit=100,                    # 进程数限制
+    network="swarm-net",              # 自定义网络
+    detach=True,
+)</code></pre>
+
+<h2 id="isolation">6. 隔离技术对比</h2>
+<table>
+<tr><th>技术</th><th>隔离级别</th><th>启动时间</th><th>开销</th><th>需要 KVM</th></tr>
+<tr><td><strong>Docker (runc)</strong> <span class="badge">我们的选择</span></td><td>Namespaces + cgroups + seccomp</td><td>180-500ms</td><td>极低</td><td>否</td></tr>
+<tr><td>gVisor</td><td>用户态内核</td><td>300-800ms</td><td>中</td><td>否</td></tr>
+<tr><td>Firecracker</td><td>硬件虚拟化</td><td>28ms(snap)/1s(cold)</td><td>高</td><td>是</td></tr>
+<tr><td>Kata Containers</td><td>轻量 VM</td><td>较高（offset by warm pool）</td><td>高</td><td>是</td></tr>
+</table>
+
+<hr>
+
+<h2 id="swarch">7. 多 Agent 架构</h2>
+
+<h3>框架对比</h3>
+<table>
+<tr><th>特性</th><th>LangGraph</th><th>CrewAI</th><th>AutoGen</th><th>OpenAI Agents SDK</th></tr>
+<tr><td>核心模式</td><td>图状态机</td><td>角色 Crew</td><td>对话驱动</td><td>Handoff</td></tr>
+<tr><td>编排</td><td>Nodes + 条件边</td><td>Process.hierarchical</td><td>异步消息</td><td>Handoff 函数</td></tr>
+<tr><td>状态管理</td><td>全局共享 + checkpoint</td><td>内部任务追踪</td><td>对话历史</td><td>对话历史</td></tr>
+<tr><td>通信</td><td>间接（共享 state）</td><td>结构化 task handoff</td><td>异步消息</td><td>Handoff</td></tr>
+<tr><td>生产就绪</td><td><span class="badge">最佳</span></td><td>好（快速原型）</td><td>好（Microsoft）</td><td>Agents SDK 生产级</td></tr>
+</table>
+
+<h3>Orchestrator-Worker 模式（我们的核心模式）</h3>
+<div class="diagram">用户请求 → FastAPI → [Orchestrator Agent]
+                            │
+                  ┌─────────┼─────────┐
+                  ▼         ▼         ▼
+           [Frontend   [Backend   [其他...
+            Worker]      Worker]
+            Docker      Docker
+            Container   Container
+                  │         │
+                  ▼         ▼
+           /artifacts/frontend/  /artifacts/backend/
+                  │         │
+                  └────┬────┘
+                       ▼
+              Orchestrator 读取产物
+              汇总 → 返回用户</div>
+
+<h2 id="multitenant">9. 多租户方案</h2>
+
+<h3>目录隔离</h3>
+<pre><code>/shared_output/
+├── tenants/{tenant_id}/
+│   ├── tasks/{task_id}/
+│   │   ├── input/           # 任务输入
+│   │   ├── workspace/       # Worker 工作空间
+│   │   ├── artifacts/       # 产出（可下载）
+│   │   └── state.json       # 任务执行状态
+│   └── config/              # 租户配置
+└── shared_libs/              # 公共库（只读）</code></pre>
+
+<h3>隔离策略</h3>
+<table>
+<tr><th>维度</th><th>策略</th></tr>
+<tr><td>存储</td><td>每租户独立 volume 子路径 <code>/shared_output/tenants/{id}/</code></td></tr>
+<tr><td>网络</td><td>Docker 自定义网络，按需网络策略</td></tr>
+<tr><td>凭证</td><td>每租户独立 API key，容器启动时注入</td></tr>
+<tr><td>资源</td><td>docker-py nano_cpus + mem_limit 配额</td></tr>
+<tr><td>上下文</td><td>task_id + tenant_id 双维度隔离，session 基于 task_id</td></tr>
+<tr><td>产物交付</td><td>FastAPI 端点校验 tenant_id 后提供下载</td></tr>
+</table>
+
+<h3>产物分发流程</h3>
+<div class="diagram">1. 用户提交任务 → FastAPI 生成 task_id
+2. 创建目录 /shared_output/tenants/{tenant_id}/tasks/{task_id}/
+3. Orchestrator 编排 Worker Agent
+4. Worker 写入各自子目录
+5. Orchestrator 汇总产物
+6. FastAPI 端点：GET /api/tasks/{task_id}/artifacts → 校验权限 → 返回文件列表
+7. GET /api/tasks/{task_id}/download → 返回压缩包</div>
+
+<h2 id="fastapi">10. FastAPI 入口设计</h2>
+
+<h3>API 结构</h3>
+<table>
+<tr><th>方法</th><th>路径</th><th>说明</th></tr>
+<tr><td>POST</td><td><code>/api/chat</code></td><td>发送用户消息，触发 Agent Swarm</td></tr>
+<tr><td>GET</td><td><code>/api/tasks/{task_id}</code></td><td>获取任务状态</td></tr>
+<tr><td>GET</td><td><code>/api/tasks</code></td><td>列举任务</td></tr>
+<tr><td>DELETE</td><td><code>/api/tasks/{task_id}</code></td><td>取消任务</td></tr>
+<tr><td>GET</td><td><code>/api/tasks/{task_id}/artifacts</code></td><td>列举产物</td></tr>
+<tr><td>GET</td><td><code>/api/tasks/{task_id}/download</code></td><td>下载产物压缩包</td></tr>
+<tr><td>WS</td><td><code>/ws/tasks/{task_id}</code></td><td>WebSocket 实时流式推送</td></tr>
+<tr><td>POST</td><td><code>/api/agents/list</code></td><td>列出可用 Agent 类型</td></tr>
+<tr><td>GET</td><td><code>/api/health</code></td><td>健康检查</td></tr>
+</table>
+
+<h3>WebSocket 事件类型</h3>
+<table>
+<tr><th>type</th><th>说明</th></tr>
+<tr><td><code>text_delta</code></td><td>Token-by-token 流式文本</td></tr>
+<tr><td><code>tool_call</code></td><td>Agent 正在调用工具</td></tr>
+<tr><td><code>tool_result</code></td><td>工具执行结果</td></tr>
+<tr><td><code>handoff</code></td><td>Orchestrator 路由到 Worker</td></tr>
+<tr><td><code>artifact</code></td><td>Worker 产出产物</td></tr>
+<tr><td><code>progress</code></td><td>进度更新</td></tr>
+<tr><td><code>error</code></td><td>错误</td></tr>
+<tr><td><code>complete</code></td><td>任务完成</td></tr>
+</table>
+
+<h2 id="summary">11. 总结 — 我们的架构决策</h2>
+
+<div class="note">
+<strong>关键决策汇总：</strong>
+<ol>
+<li><strong>Agent 框架</strong>：Google ADK（Apache 2.0，A2A 原生支持，自动上下文管理）</li>
+<li><strong>通信协议</strong>：A2A（JSON-RPC 2.0 over HTTP + SSE），a2a-sdk Python</li>
+<li><strong>沙箱</strong>：Docker runc（ Namespaces + cgroups，低开销）</li>
+<li><strong>容器池</strong>：Jazzmine SandboxPool 模式，预启动 5 个，异步 checkout/return</li>
+<li><strong>编排模式</strong>：Orchestrator-Worker（Orchestrator 通过 A2A 委派任务给 Worker Agent）</li>
+<li><strong>存储</strong>：共享 Volume 挂载，每租户/每任务独立子目录</li>
+<li><strong>入口</strong>：FastAPI（REST + WebSocket）</li>
+<li><strong>模型</strong>：GLM Coding Plan（OpenAI-compatible API）</li>
+</ol>
+</div>
+
+<footer style="margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#666;font-size:0.85em">
+<p>调研日期：2026-06-13 | 来源：e2b.dev, modal.com, langchain docs, Docker docs, FastAPI docs</p>
+</footer>
+</main>
+</body>
+</html>
