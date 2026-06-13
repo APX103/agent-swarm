@@ -11,6 +11,9 @@ from src.task_manager.manager import TaskManager
 from src.container_pool.pool import ContainerPoolManager
 from src.orchestrator.orchestrator import Orchestrator
 from src.api.routes import router, set_deps
+from src.registry.registry import AgentRegistry
+from src.adapters.manager import AdapterManager
+from src.gateway import routes as gateway
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,12 +25,14 @@ logger = logging.getLogger(__name__)
 pool_manager: ContainerPoolManager = None
 task_manager: TaskManager = None
 orchestrator: Orchestrator = None
+registry: AgentRegistry = None
+adapter_manager: AdapterManager = None
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global pool_manager, task_manager, orchestrator
+    global pool_manager, task_manager, orchestrator, registry, adapter_manager
     
     logger.info("🐝 Agent Swarm starting up...")
     
@@ -37,7 +42,23 @@ async def _lifespan(app: FastAPI):
     )
     logger.info("TaskManager initialized")
     
-    # 2. 初始化容器池
+    # 2. 初始化 Agent 注册中心
+    registry = AgentRegistry(
+        redis_url=settings.redis.redis_url,
+        heartbeat_ttl=settings.redis.heartbeat_ttl,
+    )
+    try:
+        await registry.connect()
+        logger.info("AgentRegistry connected to Redis")
+    except Exception as e:
+        logger.warning(f"AgentRegistry Redis connect failed (running degraded): {e}")
+    
+    # 3. 初始化适配器管理器
+    adapter_manager = AdapterManager(registry=registry)
+    gateway.set_deps(registry, adapter_manager)
+    logger.info("AdapterManager initialized")
+    
+    # 4. 初始化容器池
     pool_manager = ContainerPoolManager(settings=settings)
     try:
         await pool_manager.startup()
@@ -46,7 +67,7 @@ async def _lifespan(app: FastAPI):
         logger.error(f"ContainerPool startup failed (running in mock mode): {e}")
         logger.warning("Will operate without real Docker containers")
     
-    # 3. 初始化编排器
+    # 5. 初始化编排器
     orchestrator = Orchestrator(
         settings=settings,
         pool_manager=pool_manager,
@@ -54,7 +75,7 @@ async def _lifespan(app: FastAPI):
     )
     logger.info("Orchestrator initialized")
     
-    # 4. 注入依赖
+    # 6. 注入依赖
     set_deps(orchestrator, task_manager, pool_manager)
     
     logger.info("🐝 Agent Swarm ready!")
@@ -63,6 +84,11 @@ async def _lifespan(app: FastAPI):
     
     # 清理
     logger.info("🐝 Agent Swarm shutting down...")
+    if registry:
+        try:
+            await registry.close()
+        except Exception:
+            pass
     if pool_manager:
         await pool_manager.shutdown()
     logger.info("👋 Goodbye!")
@@ -86,6 +112,7 @@ def create_app(lifespan=None) -> FastAPI:
     )
     
     app.include_router(router)
+    app.include_router(gateway.router)
     
     return app
 

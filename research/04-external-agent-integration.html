@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外部 Agent 动态接入方案调研</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+    --purple: #bc8cff; --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 2em; margin-bottom: 8px; color: #fff; }
+  h1 span { color: var(--accent); }
+  .meta { color: var(--text2); margin-bottom: 40px; font-size: 0.9em; }
+  h2 { color: #fff; font-size: 1.5em; margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { color: var(--accent); font-size: 1.15em; margin: 28px 0 12px; }
+  h4 { color: var(--purple); font-size: 1em; margin: 20px 0 8px; }
+  p, li { margin-bottom: 10px; }
+  ul { padding-left: 24px; }
+  code { background: var(--surface); border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px; font-size: 0.88em; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; overflow-x: auto; margin: 16px 0; font-size: 0.85em; line-height: 1.6; }
+  pre code { background: none; border: none; padding: 0; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 24px 0; overflow-x: auto; text-align: center; }
+  .diagram pre { border: none; background: none; padding: 0; font-size: 0.82em; text-align: left; display: inline-block; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92em; }
+  th { background: var(--surface); color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); font-weight: 600; }
+  td { padding: 10px 14px; border: 1px solid var(--border); }
+  tr:hover td { background: rgba(88,166,255,0.04); }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+  .tag-green { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tag-orange { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .tag-red { background: rgba(248,81,73,0.15); color: var(--red); }
+  .tag-purple { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .tag-cyan { background: rgba(57,210,192,0.15); color: var(--cyan); }
+  .callout { background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 20px 0; }
+  .callout.warn { background: rgba(210,153,34,0.08); border-left-color: var(--orange); }
+  .callout.success { background: rgba(63,185,80,0.08); border-left-color: var(--green); }
+  .callout strong { color: #fff; }
+  .section-nav { position: sticky; top: 0; background: var(--bg); padding: 12px 0; z-index: 10; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+  .section-nav a { color: var(--accent); text-decoration: none; margin-right: 20px; font-size: 0.88em; }
+  .section-nav a:hover { text-decoration: underline; }
+  .flow-steps { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 16px 0; }
+  .flow-step { background: var(--surface); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 0.88em; white-space: nowrap; }
+  .flow-arrow { color: var(--accent); font-size: 1.2em; }
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .comparison-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .comparison-card h4 { margin-top: 0; }
+  @media (max-width: 700px) {
+    .comparison { grid-template-columns: 1fr; }
+    .container { padding: 20px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<h1>外部 Agent <span>动态接入</span>方案调研</h1>
+<div class="meta">Agent Swarm v0.2 方案设计 · 2026-06-13 · 纯调研文档，不涉及实现</div>
+
+<div class="section-nav">
+  <a href="#problem">问题定义</a>
+  <a href="#interfaces">接口适配</a>
+  <a href="#discovery">服务发现</a>
+  <a href="#health">健康检测</a>
+  <a href="#robustness">健壮性设计</a>
+  <a href="#architecture">推荐架构</a>
+  <a href="#conclusion">结论</a>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="problem">1. 问题定义</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<p>团队中其他开发者构建了自己的 AI Agent，但接入方式各不相同：</p>
+
+<div class="comparison">
+  <div class="comparison-card">
+    <h4>CLI Agent</h4>
+    <p>命令行启动，stdin 输入，stdout 输出。如 <code>claude --print</code>、<code>codex</code>、自定义 Python 脚本。</p>
+  </div>
+  <div class="comparison-card">
+    <h4>Interactive Agent</h4>
+    <p>交互式 REPL，多轮对话，保持会话状态。如 <code>ipython</code> 式的 Agent。</p>
+  </div>
+  <div class="comparison-card">
+    <h4>Completion API Agent</h4>
+    <p>提供 OpenAI 兼容的 HTTP 接口，如 <code>POST /v1/chat/completions</code>。</p>
+  </div>
+  <div class="comparison-card">
+    <h4>其他协议 Agent</h4>
+    <p>MCP Server、gRPC 服务、WebSocket 实时流等。</p>
+  </div>
+</div>
+
+<p><strong>核心需求：</strong></p>
+<ul>
+  <li><strong>动态接入</strong> — Agent 上线后，Orchestrator 自动感知并可用</li>
+  <li><strong>动态离线</strong> — Agent 下线后，Orchestrator 自动移除，不再调度</li>
+  <li><strong>接口无关</strong> — 无论原始接口是什么，都能被统一调用</li>
+  <li><strong>健壮性</strong> — 单个 Agent 故障不影响整体服务</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="interfaces">2. 接口适配：Agent Adapter 模式</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<p><strong>核心思路：</strong>定义一个<strong>统一的 Agent 接口规范</strong>（Canonical Interface），然后为每种异构接口编写一个<strong>薄适配器</strong>（Adapter），将原生协议翻译为统一格式。</p>
+
+<div class="diagram">
+<pre>
+                    ┌─────────────────────┐
+                    │   Orchestrator      │
+                    │   (统一调用接口)     │
+                    └─────────┬───────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+     ┌────────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
+     │ CLI Adapter   │ │ HTTP Adapter│ │ MCP Adapter │  ...
+     │ (stdin/stdout)│ │ (OpenAI API)│ │ (JSON-RPC)  │
+     └────────┬──────┘ └──────┬──────┘ └──────┬──────┘
+              │               │               │
+     ┌────────▼──────┐ ┌──────▼──────┐ ┌──────▼──────┐
+     │  CLI Agent    │ │  REST Agent │ │ MCP Server  │
+     │  (friend-A)   │ │  (friend-B) │ │  (friend-C) │
+     └───────────────┘ └─────────────┘ └─────────────┘
+</pre>
+</div>
+
+<h3>2.1 统一调用接口（Canonical Interface）</h3>
+
+<p>所有 Adapter 必须实现以下接口：</p>
+
+<pre><code>class AgentBackend(ABC):
+    """所有 Agent 适配器的统一基类"""
+
+    async def invoke(self, task: str, context: dict) -> AgentResult:
+        """同步调用 — 发送任务，等待结果"""
+        ...
+
+    async def invoke_stream(self, task: str, context: dict) -> AsyncIterator[AgentEvent]:
+        """流式调用 — 逐步返回事件"""
+        ...
+
+    async def health_check(self) -> bool:
+        """健康检查 — Agent 是否存活"""
+        ...
+
+    @property
+    def capabilities(self) -> AgentCapabilities:
+        """能力声明 — 该 Agent 能做什么"""
+        ...
+
+@dataclass
+class AgentResult:
+    success: bool
+    output: str                    # 文本输出
+    artifacts: list[str]           # 产出的文件路径列表
+    error: str | None              # 错误信息
+    metadata: dict                # 扩展元数据
+
+@dataclass
+class AgentCapabilities:
+    skills: list[str]              # 能力标签 ["coding", "frontend", "data-analysis"]
+    input_modes: list[str]         # 接受的输入格式
+    output_modes: list[str]        # 输出格式
+    tools: list[ToolInfo]          # 可调用的工具列表
+</code></pre>
+
+<h3>2.2 各类接口的适配方案</h3>
+
+<table>
+  <tr>
+    <th>原始接口</th>
+    <th>适配方式</th>
+    <th>实现复杂度</th>
+    <th>开源参考</th>
+  </tr>
+  <tr>
+    <td><span class="tag tag-green">CLI</span><br><code>stdin/stdout</code></td>
+    <td>
+      <strong>子进程包装：</strong>启动 CLI 进程，将任务文本写入 stdin，从 stdout 解析 JSON 输出。<br>
+      关键：设置 <code>--json-output</code> 标志；超时控制；进程生命周期管理。
+    </td>
+    <td><span class="tag tag-green">低</span></td>
+    <td>agent-cli-to-api</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-cyan">OpenAI API</span><br><code>POST /v1/chat/completions</code></td>
+    <td>
+      <strong>HTTP 代理：</strong>直接将任务封装为 OpenAI 格式的 messages 发送。<br>
+      天然支持 streaming (SSE)；已有成熟的 httpx/openai SDK。
+    </td>
+    <td><span class="tag tag-green">低</span></td>
+    <td>LiteLLM, OneAPI</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-purple">MCP Server</span><br><code>JSON-RPC 2.0</code></td>
+    <td>
+      <strong>协议转换：</strong>调用 <code>tools/list</code> 发现能力，调用 <code>tools/call</code> 执行任务。<br>
+      支持 stdio（本地）和 HTTP（远程）两种传输方式。
+    </td>
+    <td><span class="tag tag-orange">中</span></td>
+    <td>FastMCP, mcp-sdk-python</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-orange">gRPC</span><br><code>protobuf</code></td>
+    <td>
+      <strong>protobuf 序列化：</strong>实现统一的 AgentService proto 定义，Agent 只需实现该 proto。<br>
+      二进制传输效率高（3-10x 体积优势）；支持双向流。
+    </td>
+    <td><span class="tag tag-orange">中</span></td>
+    <td>grpcio, vLLM</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-red">WebSocket</span><br><code>ws://</code></td>
+    <td>
+      <strong>消息适配：</strong>建立 WS 连接，将任务作为 JSON 消息发送，接收结构化事件流。<br>
+      适合实时交互场景。
+    </td>
+    <td><span class="tag tag-green">低</span></td>
+    <td>AG-UI Protocol (CopilotKit)</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-cyan">A2A Protocol</span><br><code>Google 标准</code></td>
+    <td>
+      <strong>原生兼容：</strong>我们的 Worker 已实现 A2A。<br>
+      外部 Agent 只需实现 <code>GET /.well-known/agent-card.json</code> + <code>POST /</code>。
+    </td>
+    <td><span class="tag tag-green">极低</span></td>
+    <td>a2a-python SDK</td>
+  </tr>
+</table>
+
+<h3>2.3 CLI Adapter 详细设计</h3>
+
+<p>CLI Agent 是最常见的异构接口。适配器的核心挑战是<strong>进程生命周期管理</strong>：</p>
+
+<pre><code>class CLIAdapter(AgentBackend):
+    """将任意 CLI 程序适配为 AgentBackend"""
+
+    def __init__(self, command: str, args: list[str], timeout: int = 300):
+        self.command = command          # 如 "python3", "claude"
+        self.args = args                # 如 ["--print", "--json"]
+        self.timeout = timeout
+
+    async def invoke(self, task: str, context: dict) -> AgentResult:
+        proc = await asyncio.create_subprocess_exec(
+            self.command, *self.args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=task.encode()),
+                timeout=self.timeout,
+            )
+            return AgentResult(
+                success=proc.returncode == 0,
+                output=stdout.decode(),
+                artifacts=self._parse_artifacts(stdout.decode()),
+                error=stderr.decode() if proc.returncode != 0 else None,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            return AgentResult(success=False, output="", error="CLI process timed out")
+
+    async def health_check(self) -> bool:
+        """检查 CLI 可执行文件是否存在"""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.command, "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=5)
+            return proc.returncode == 0
+        except (FileNotFoundError, asyncio.TimeoutError):
+            return False
+</code></pre>
+
+<div class="callout warn">
+  <strong>⚠️ 注意：</strong>CLI 适配不适合长时间运行的交互式 Agent。如果 CLI Agent 需要保持会话状态（如需要多轮对话），应考虑将其包装为一个常驻的 HTTP 服务，而非每次 spawn 新进程。
+</div>
+
+<h3>2.4 OpenAI API Adapter 详细设计</h3>
+
+<p>对于已有 HTTP 接口的 Agent，适配最简单：</p>
+
+<pre><code>class OpenAICompatibleAdapter(AgentBackend):
+    """适配任何 OpenAI 兼容的 /v1/chat/completions 接口"""
+
+    def __init__(self, base_url: str, api_key: str = "", model: str = "default",
+                 timeout: float = 300):
+        self.base_url = base_url.rstrip("/")
+        self.client = httpx.AsyncClient(timeout=timeout)
+        self.headers = {"Authorization": f"Bearer {api_key}"}
+        self.model = model
+
+    async def invoke(self, task: str, context: dict) -> AgentResult:
+        system_prompt = context.get("system_prompt", "You are a helpful assistant.")
+        resp = await self.client.post(
+            f"{self.base_url}/v1/chat/completions",
+            headers=self.headers,
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": task},
+                ],
+                "temperature": 0.7,
+            },
+        )
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        return AgentResult(success=True, output=content, artifacts=[], metadata=data.get("usage", {}))
+
+    async def health_check(self) -> bool:
+        try:
+            resp = await self.client.get(f"{self.base_url}/v1/models", headers=self.headers)
+            return resp.status_code == 200
+        except Exception:
+            return False
+</code></pre>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="discovery">3. 服务发现：Agent 如何被发现</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<p>A2A 协议定义了三种发现策略：</p>
+
+<table>
+  <tr><th>策略</th><th>模式</th><th>适用场景</th><th>动态性</th></tr>
+  <tr>
+    <td><strong>Well-Known URI</strong><br><code>GET /.well-known/agent-card.json</code></td>
+    <td>Pull（拉取）</td>
+    <td>已知地址的公开 Agent</td>
+    <td><span class="tag tag-red">静态</span></td>
+  </tr>
+  <tr>
+    <td><strong>Service Registry</strong><br>注册中心</td>
+    <td>Push + Pull（推拉）</td>
+    <td>动态伸缩的 Agent 池</td>
+    <td><span class="tag tag-green">动态</span></td>
+  </tr>
+  <tr>
+    <td><strong>Direct Config</strong><br>配置文件 / 环境变量</td>
+    <td>Static（静态）</td>
+    <td>开发环境、紧密耦合</td>
+    <td><span class="tag tag-red">静态</span></td>
+  </tr>
+</table>
+
+<p>对于我们的需求（Agent 随时上线/下线），<strong>Service Registry 模式</strong>是唯一合适的选择。</p>
+
+<h3>3.1 注册中心方案对比</h3>
+
+<table>
+  <tr>
+    <th>方案</th>
+    <th>一致性</th>
+    <th>复杂度</th>
+    <th>自动注销</th>
+    <th>实时通知</th>
+    <th>适用规模</th>
+  </tr>
+  <tr>
+    <td><strong>SQLite</strong></td>
+    <td>强（单节点）</td>
+    <td><span class="tag tag-green">极低</span></td>
+    <td>定时 sweep</td>
+    <td>轮询</td>
+    <td>开发 / 单机</td>
+  </tr>
+  <tr>
+    <td><strong>Redis</strong></td>
+    <td>最终一致（单节点强）</td>
+    <td><span class="tag tag-green">低</span></td>
+    <td>TTL 过期</td>
+    <td>Pub/Sub</td>
+    <td><span class="tag tag-cyan">推荐</span> 数十 Agent</td>
+  </tr>
+  <tr>
+    <td><strong>etcd</strong></td>
+    <td>强（Raft 共识）</td>
+    <td><span class="tag tag-orange">中</span></td>
+    <td>Lease 过期</td>
+    <td>Watch API</td>
+    <td>百+ Agent / K8s</td>
+  </tr>
+  <tr>
+    <td><strong>Consul</strong></td>
+    <td>最终一致</td>
+    <td><span class="tag tag-red">高</span></td>
+    <td>Health Check + Deregister</td>
+    <td>Watch</td>
+    <td>异构基础设施</td>
+  </tr>
+</table>
+
+<div class="callout success">
+  <strong>✅ 推荐方案：Redis</strong>。理由：DGX Spark 上 Redis 部署成本极低（<code>docker run -d redis</code>）；TTL 过期天然支持自动注销；Pub/Sub 提供实时通知；对数十个 Agent 完全够用。如果未来需要分布式，可迁移到 etcd。
+</div>
+
+<h3>3.2 Redis 注册中心工作流程</h3>
+
+<div class="diagram">
+<pre>
+Agent 上线:
+  Agent ──POST──▶ Gateway ──SET──▶ Redis
+                                Key: agent:{id}         TTL: 30s
+                                Key: agent:{id}:meta     (endpoint, capabilities)
+                                └──PUBLISH──▶ "agent:online:{id}"
+
+心跳续约 (每 10s):
+  Agent ──POST──▶ Gateway ──EXPIRE──▶ Redis (TTL 30s → 续约)
+
+Agent 下线 / 崩溃:
+  心跳停止 30s → Redis TTL 过期 → Key 自动删除
+                                └──PUBLISH──▶ "agent:offline:{id}"
+
+Orchestrator 感知:
+  Redis Pub/Sub ──▶ Orchestrator 收到事件 → 更新可用 Agent 列表
+</pre>
+</div>
+
+<h3>3.3 Agent 端接入方式（对朋友最友好的方案）</h3>
+
+<p>我们提供两种接入模式，从简到繁：</p>
+
+<h4>模式 A：零代码接入（适合已有 A2A/HTTP 接口的 Agent）</h4>
+<p>Agent 只需在启动后向 Gateway 发一个注册请求：</p>
+
+<pre><code># Agent 启动后调用一次
+curl -X POST http://GATEWAY:19000/api/v1/agents/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "张三的 Code Review Agent",
+    "endpoint": "http://zhangsan-pc:8080",
+    "protocol": "openai",              # "a2a" | "openai" | "cli" | "mcp"
+    "skills": ["code-review", "testing"],
+    "heartbeat_interval": 10           # 秒
+  }'
+
+# 每隔 heartbeat_interval 秒发送心跳
+curl -X POST http://GATEWAY:19000/api/v1/agents/{agent_id}/heartbeat
+
+# Agent 关闭前发送注销（可选，TTL 过期会自动处理）
+curl -X POST http://GATEWAY:19000/api/v1/agents/{agent_id}/deregister
+</code></pre>
+
+<h4>模式 B：SDK 接入（适合需要更深度集成的 Agent）</h4>
+
+<pre><code>from swarm_sdk import AgentClient
+
+client = AgentClient(gateway_url="http://GATEWAY:19000")
+
+# 注册 + 自动心跳（后台线程）
+await client.register(
+    name="我的 Agent",
+    endpoint="http://localhost:8080",
+    protocol="openai",
+    skills=["code-review", "testing"],
+)
+
+# 此后 SDK 会自动每 10s 发送心跳
+# Agent 关闭时 SDK 自动发送 deregister
+
+# 或者用 context manager（推荐）
+async with AgentClient("http://GATEWAY:19000") as client:
+    await client.register(name="...", endpoint="...", skills=[...])
+    # ... Agent 正常工作 ...
+    # context manager 退出时自动 deregister
+</code></pre>
+
+<div class="callout">
+  <strong>💡 关键设计：</strong>即使 Agent 不发送 deregister（如进程被 kill、断电、网络中断），Redis TTL 过期也会自动清除注册信息，Orchestrator 通过 Pub/Sub 立即收到通知。这就是<strong> lease-based liveness</strong>的核心优势——<strong>不需要依赖 Agent 的显式注销</strong>。
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="health">4. 健康检测：如何知道 Agent 是否还活着</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<p>三层防护确保 Orchestrator 不会调度到已死亡的 Agent：</p>
+
+<h3>4.1 第一层：TTL + 心跳（被动检测）</h3>
+
+<table>
+  <tr><th>参数</th><th>推荐值</th><th>说明</th></tr>
+  <tr><td>心跳间隔</td><td><code>10 秒</code></td><td>Agent 每 10s 向 Registry 发送一次心跳</td></tr>
+  <tr><td>TTL</td><td><code>30 秒</code>（= 3 × 间隔）</td><td>Redis key 的过期时间，允许 2 次心跳丢失的容错</td></tr>
+  <tr><td>连续丢失阈值</td><td><code>3 次</code></td><td>3 次心跳未收到才标记为可疑（避免网络抖动误判）</td></tr>
+</table>
+
+<p>流程：</p>
+<div class="flow-steps">
+  <span class="flow-step">Agent 正常运行</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step">每 10s 发心跳</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step">Redis TTL 续约到 30s</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step" style="border-color:var(--green)">状态: healthy</span>
+</div>
+<div class="flow-steps">
+  <span class="flow-step" style="border-color:var(--red)">Agent 崩溃 / 断网</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step">心跳停止</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step">30s 后 TTL 过期</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step">Redis 删除 key + 发 Pub/Sub</span>
+  <span class="flow-arrow">→</span>
+  <span class="flow-step" style="border-color:var(--red)">Orchestrator 移除 Agent</span>
+</div>
+
+<h3>4.2 第二层：主动健康检查（调度前验证）</h3>
+
+<p>即使 Registry 中标记为 healthy，在<strong>实际调度前</strong>也做一次轻量级探测：</p>
+
+<pre><code>async def pre_dispatch_check(agent: RegisteredAgent) -> bool:
+    """调度前快速探测 — 确认 Agent 端点真的可达"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{agent.endpoint}/health")
+            return resp.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
+</code></pre>
+
+<div class="callout warn">
+  <strong>⚠️ 防止 "Zombie Agent" 问题：</strong>仅靠心跳不能保证 Agent 的<strong>业务能力</strong>正常。Agent 进程可能存活（心跳正常）但内部 LLM API 已失效、内存泄漏导致超时等。主动健康检查可以捕获这类<strong>"半死不活"</strong>状态。
+</div>
+
+<h3>4.3 第三层：Phi Accrual Failure Detector（自适应检测）</h3>
+
+<p>对于生产级部署，推荐使用 <strong>Phi Accrual Failure Detector</strong>（Hayashibara 等，2004），替代简单的固定超时：</p>
+
+<ul>
+  <li><strong>原理：</strong>基于心跳到达间隔的历史统计（均值 μ + 标准差 σ），计算当前"可疑度" φ</li>
+  <li><strong>公式：</strong>φ = −log₁₀(1 − F(t))，其中 F(t) 是正态分布的累积分布函数</li>
+  <li><strong>优势：</strong>网络抖动时自动放宽阈值（减少误判），网络稳定时自动收紧（快速发现故障）</li>
+  <li><strong>实现者：</strong>Akka Cluster、Hazelcast</li>
+  <li><strong>配置参考：</strong>阈值 φ = 8（约 10⁻⁸ 概率判错），基于最近 100 次心跳计算</li>
+</ul>
+
+<div class="callout">
+  <strong>💡 建议：</strong>MVP 阶段用简单的 TTL + 心跳就够了。生产部署时再升级到 Phi Accrual。
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="robustness">5. 健壮性设计：单点故障不影响全局</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<h3>5.1 Circuit Breaker（熔断器）</h3>
+
+<p>为每个外部 Agent 配置独立的熔断器，防止故障扩散：</p>
+
+<div class="diagram">
+<pre>
+                    调度请求
+                       │
+                       ▼
+              ┌─────────────────┐
+              │   Circuit       │
+              │   Breaker       │
+              │                 │
+              │  ┌───────────┐  │
+              │  │  Closed   │──▶ 正常转发到 Agent
+              │  │  (正常)    │  │
+              │  └─────┬─────┘  │
+              │        │        │
+              │  失败率 > 50%    │
+              │        ▼        │
+              │  ┌───────────┐  │
+              │  │   Open    │──▶ 立即拒绝（不实际调用）
+              │  │  (熔断)    │  │
+              │  └─────┬─────┘  │
+              │        │        │
+              │  等待 30s        │
+              │        ▼        │
+              │  ┌───────────┐  │
+              │  │ Half-Open │──▶ 放行 2-3 个探测请求
+              │  │  (探测)    │  │
+              │  └───────────┘  │
+              └─────────────────┘
+</pre>
+</div>
+
+<table>
+  <tr><th>参数</th><th>推荐值</th><th>说明</th></tr>
+  <tr><td>failureRateThreshold</td><td>50%</td><td>滑动窗口内 50% 失败即熔断</td></tr>
+  <tr><td>slidingWindowSize</td><td>10-20 次调用</td><td>统计窗口大小</td></tr>
+  <tr><td>minimumNumberOfCalls</td><td>5</td><td>至少 5 次调用才开始计算失败率（避免前 1-2 次就熔断）</td></tr>
+  <tr><td>waitDurationInOpenState</td><td>30s</td><td>熔断后等待 30s 再开始探测</td></tr>
+  <tr><td>permittedCallsInHalfOpen</td><td>3</td><td>半开状态最多放行 3 个探测请求</td></tr>
+  <tr><td>slowCallDurationThreshold</td><td>15s</td><td>超过 15s 的调用也算"慢失败"</td></tr>
+</table>
+
+<h3>5.2 优雅降级层级</h3>
+
+<p>当外部 Agent 不可用时，Orchestrator 按层级降级：</p>
+
+<table>
+  <tr><th>级别</th><th>状态</th><th>行为</th><th>用户体验</th></tr>
+  <tr>
+    <td><span class="tag tag-green">Level 0</span></td>
+    <td>Healthy</td>
+    <td>正常调度外部 Agent</td>
+    <td>完整功能</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-cyan">Level 1</span></td>
+    <td>External Down</td>
+    <td>回退到内置 Docker Agent</td>
+    <td>功能完整，可能质量略低</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-orange">Level 2</span></td>
+    <td>Pool Exhausted</td>
+    <td>返回缓存的历史结果（如果有类似任务）</td>
+    <td>数据可能过时</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-red">Level 3</span></td>
+    <td>All Down</td>
+    <td>返回明确错误 + 预估恢复时间</td>
+    <td>用户知道发生了什么</td>
+  </tr>
+</table>
+
+<h3>5.3 任务重试与调度策略</h3>
+
+<ul>
+  <li><strong>调度前检查：</strong>先查 Registry 获取 healthy 的 Agent 列表 → 按技能匹配 → 按优先级排序</li>
+  <li><strong>失败重试：</strong>指数退避 + 抖动（1s → 2s → 4s → ...，最大 30s）</li>
+  <li><strong>备选调度：</strong>首选 Agent 失败后，自动尝试同技能的备选 Agent</li>
+  <li><strong>全局重试预算：</strong>每分钟最多重试 N 次，防止重试风暴</li>
+  <li><strong>任务超时：</strong>单个任务整体超时（如 5 分钟），超时后强制完成并返回已有产出</li>
+</ul>
+
+<h3>5.4 幂等性保障</h3>
+
+<p>防止重复调度（网络重试、Orchestrator 重启等场景）：</p>
+
+<ul>
+  <li>每个任务有唯一 <code>task_id</code></li>
+  <li>调度请求携带 <code>idempotency_key</code></li>
+  <li>Agent 端检查是否已处理过相同 key 的请求</li>
+  <li>共享存储目录使用 <code>task_id</code> 隔离，天然防止文件冲突</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="architecture">6. 推荐架构</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<h3>6.1 整体架构图</h3>
+
+<div class="diagram">
+<pre>
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Orchestrator                                │
+│                                                                     │
+│  ┌────────────────┐   ┌──────────────┐   ┌─────────────────────┐    │
+│  │  Agent Router  │   │   Circuit    │   │   Task Manager      │    │
+│  │  (技能匹配 +    │──▶│   Breakers   │──▶│   (任务生命周期)     │    │
+│  │   优先级排序)   │   │  (per-agent) │   │                     │    │
+│  └───────┬────────┘   └──────────────┘   └─────────────────────┘    │
+│          │                                                          │
+│          ▼                                                          │
+│  ┌────────────────────────────────────────────────────────────┐    │
+│  │              Agent Registry Client                           │    │
+│  │         (Redis Pub/Sub 订阅在线/离线事件)                     │    │
+│  └────────────────────────────────────────────────────────────┘    │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ Redis (Pub/Sub + TTL Keys)
+                             ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Gateway Service                               │
+│                                                                     │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐        │
+│  │  Registry    │   │  Adapter     │   │  Health Monitor  │        │
+│  │  (CRUD +     │   │  Manager     │   │  (主动探测)       │        │
+│  │  heartbeat)  │   │  (接口适配)   │   │                  │        │
+│  └──────┬───────┘   └──────┬───────┘   └──────────────────┘        │
+└─────────┼──────────────────┼────────────────────────────────────────┘
+          │                  │
+    ┌─────┼──────────────────┼──────────────────────┐
+    │     │                  │                      │
+    ▼     ▼                  ▼                      ▼
+┌────────┐ ┌────────────┐ ┌────────────┐ ┌──────────────┐
+│ Docker │ │ 外部 Agent  │ │ 外部 Agent  │ │ 外部 Agent     │
+│ Workers │ │ (OpenAI API)│ │ (CLI)      │ │ (MCP Server)  │
+│ (内置)  │ │ (朋友 A)    │ │ (朋友 B)   │ │ (朋友 C)      │
+└────────┘ └────────────┘ └────────────┘ └──────────────┘
+</pre>
+</div>
+
+<h3>6.2 Gateway API 设计</h3>
+
+<p>Gateway 是新增的轻量级服务，作为外部 Agent 接入的入口：</p>
+
+<table>
+  <tr><th>Endpoint</th><th>Method</th><th>用途</th><th>调用者</th></tr>
+  <tr><td><code>/api/v1/agents/register</code></td><td>POST</td><td>Agent 自注册</td><td>外部 Agent</td></tr>
+  <tr><td><code>/api/v1/agents/{id}/heartbeat</code></td><td>POST</td><td>发送心跳续约</td><td>外部 Agent</td></tr>
+  <tr><td><code>/api/v1/agents/{id}/deregister</code></td><td>POST</td><td>主动注销</td><td>外部 Agent</td></tr>
+  <tr><td><code>/api/v1/agents</code></td><td>GET</td><td>列出所有在线 Agent</td><td>Orchestrator</td></tr>
+  <tr><td><code>/api/v1/agents?skill=code-review</code></td><td>GET</td><td>按技能查询 Agent</td><td>Orchestrator</td></tr>
+  <tr><td><code>/api/v1/agents/{id}/invoke</code></td><td>POST</td><td>通过 Gateway 间接调用</td><td>Orchestrator</td></tr>
+</table>
+
+<div class="callout">
+  <strong>💡 Gateway 可以独立于 Orchestrator 部署</strong>，也可以合并到现有 FastAPI 服务中（作为新的 router）。对于 DGX Spark 单机部署，合并更简单；未来分布式部署时再拆分。
+</div>
+
+<h3>6.3 数据模型</h3>
+
+<pre><code># Redis 中存储的数据结构
+
+# Agent 注册信息
+Key:   agent:{agent_id}
+Value: JSON {
+  "id": "uuid",
+  "name": "张三的 Code Review Agent",
+  "endpoint": "http://zhangsan-pc:8080",
+  "protocol": "openai",               # a2a | openai | cli | mcp | grpc | websocket
+  "skills": ["code-review", "testing"],
+  "capabilities": {                     # 可选，从 AgentCard 解析
+    "input_modes": ["text/plain"],
+    "output_modes": ["text/plain", "application/json"],
+    "tools": ["read_file", "write_file"]
+  },
+  "version": "1.0.0",
+  "registered_at": "2026-06-13T17:00:00Z",
+  "last_heartbeat": "2026-06-13T17:00:10Z",
+  "status": "healthy",                  # healthy | suspect | offline
+  "instance_id": "unique-per-session"   # 区分同 Agent 的不同实例
+}
+TTL: 30s（每次心跳续约）
+
+# 按技能索引（加速查询）
+Key:   skills:index:{skill_name}
+Type:  SET of agent_ids
+
+# Pub/Sub 频道
+Channel:  agent:online:{agent_id}        # Agent 上线通知
+Channel:  agent:offline:{agent_id}       # Agent 下线通知
+Channel:  agent:status_change:{agent_id} # 状态变更通知
+</code></pre>
+
+<h3>6.4 2026 Agent 协议生态定位</h3>
+
+<p>我们的架构如何与业界标准协议协同：</p>
+
+<table>
+  <tr><th>协议</th><th>角色</th><th>我们在哪用</th></tr>
+  <tr>
+    <td><strong>A2A</strong> (Google)</td>
+    <td>Agent ↔ Agent 通信</td>
+    <td>Worker 内部通信（已实现）；推荐外部 Agent 的首选接入协议</td>
+  </tr>
+  <tr>
+    <td><strong>MCP</strong> (Anthropic)</td>
+    <td>Agent ↔ Tools</td>
+    <td>通过 Adapter 支持 MCP Server 类型的外部 Agent</td>
+  </tr>
+  <tr>
+    <td><strong>AG-UI</strong> (CopilotKit)</td>
+    <td>Agent ↔ 用户 UI</td>
+    <td>未来前端 WebSocket 实时交互层（可选）</td>
+  </tr>
+  <tr>
+    <td><strong>OpenAI API</strong></td>
+    <td>LLM 调用标准</td>
+    <td>适配已有 OpenAI 兼容接口的外部 Agent</td>
+  </tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2 id="conclusion">7. 结论与实施路线</h2>
+<!-- ═══════════════════════════════════════════════ -->
+
+<h3>7.1 核心结论</h3>
+
+<ol>
+  <li><strong>Agent Adapter 模式</strong>是最灵活的接口统一方案。每个异构接口一个薄适配器，所有适配器实现相同的 <code>AgentBackend</code> 接口。5 种适配器（CLI、OpenAI API、MCP、gRPC、WebSocket）覆盖 99% 的现有 Agent。</li>
+  <li><strong>Redis + 心跳 + TTL</strong>是实现动态注册/注销的最简方案。Agent 上线注册、10s 心跳续约、30s TTL 过期自动注销。Pub/Sub 提供实时通知。</li>
+  <li><strong>Circuit Breaker</strong>防止故障扩散。每个 Agent 独立的熔断器，50% 失败率触发熔断，30s 后探测恢复。</li>
+  <li><strong>优雅降级</strong>保证可用性。外部 Agent 不可用时回退到内置 Docker Worker。</li>
+  <li><strong>Gateway Service</strong>作为新增组件，提供注册/心跳/发现/间接调用 API。可合并到现有 FastAPI 中。</li>
+</ol>
+
+<h3>7.2 实施路线</h3>
+
+<table>
+  <tr><th>阶段</th><th>内容</th><th>工作量</th></tr>
+  <tr>
+    <td><span class="tag tag-green">Phase 1</span></td>
+    <td>
+      <strong>Gateway 基础：</strong><br>
+      · Agent 注册/注销/心跳 API<br>
+      · Redis 注册中心（TTL + Pub/Sub）<br>
+      · OpenAI API Adapter（最常见接口）<br>
+      · Orchestrator 集成：从 Registry 获取 Agent 列表
+    </td>
+    <td>1-2 天</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-cyan">Phase 2</span></td>
+    <td>
+      <strong>健壮性：</strong><br>
+      · Circuit Breaker（per-agent）<br>
+      · CLI Adapter<br>
+      · MCP Adapter<br>
+      · 预调度健康检查
+    </td>
+    <td>1-2 天</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-purple">Phase 3</span></td>
+    <td>
+      <strong>增强：</strong><br>
+      · swarm-sdk Python 包（方便朋友接入）<br>
+      · 优雅降级层级<br>
+      · 按技能的智能调度<br>
+      · 监控仪表盘
+    </td>
+    <td>2-3 天</td>
+  </tr>
+</table>
+
+<h3>7.3 参考资源</h3>
+
+<ul>
+  <li><strong>A2A Protocol Spec v0.3.0</strong> — <code>github.com/google/A2A</code>（24.2k stars，150+ 组织支持）</li>
+  <li><strong>LiteLLM</strong> — 统一 LLM 调用接口的成熟实现（YC W23）</li>
+  <li><strong>agent-cli-to-api</strong> — CLI → OpenAI API 网关（"LiteLLM for agent CLIs"）</li>
+  <li><strong>FastMCP</strong> — MCP Server 快速构建框架</li>
+  <li><strong>Resilience4j</strong> — 熔断器、限流、重试的 Java/Python 参考实现</li>
+  <li><strong>AgentScope Runtime + Nacos</strong> — Agent 动态注册的生产级实现</li>
+  <li><strong>AG-UI Protocol (CopilotKit)</strong> — Agent ↔ UI 实时交互标准</li>
+</ul>
+
+</div><!-- /container -->
+
+</body>
+</html>

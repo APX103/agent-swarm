@@ -60,12 +60,20 @@ class ServerConfig:
 
 
 @dataclass
+class RedisConfig:
+    redis_url: str = "redis://localhost:6379"
+    heartbeat_ttl: int = 30
+    heartbeat_interval: int = 10
+
+
+@dataclass
 class Settings:
     server: ServerConfig = field(default_factory=ServerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     container_pool: ContainerPoolConfig = field(default_factory=ContainerPoolConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
+    redis: RedisConfig = field(default_factory=RedisConfig)
     agent_cards: list[AgentCardDef] = field(default_factory=list)
 
 
@@ -99,6 +107,9 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
 
     if "timeouts" in data:
         settings.timeouts = TimeoutConfig(**data["timeouts"])
+
+    if "redis" in data:
+        settings.redis = RedisConfig(**data["redis"])
 
     if "agent_cards" in data:
         for card in data["agent_cards"]:
