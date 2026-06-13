@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Swarm - Agent 智能水平分析与提升方案</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;--heading:#58a6ff;--accent:#f0883e;--green:#3fb950;--red:#f85149;--yellow:#d29922;--purple:#bc8cff}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.8;padding:40px;max-width:1100px;margin:0 auto}
+h1{color:var(--heading);font-size:2.2em;margin-bottom:10px}
+h2{color:var(--heading);font-size:1.5em;margin:40px 0 15px;border-bottom:1px solid var(--border);padding-bottom:8px}
+h3{color:var(--accent);font-size:1.2em;margin:24px 0 12px}
+h4{color:var(--purple);font-size:1.05em;margin:20px 0 8px}
+p{margin:8px 0;max-width:800px}
+code{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-family:'SF Mono',Consolas,monospace;font-size:0.88em;color:var(--green)}
+pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:'SF Mono',Consolas,monospace;overflow-x:auto;margin:12px 0;max-width:800px}
+pre code{background:none;border:none;padding:0;color:var(--text)}
+ul,ol{margin:8px 0 8px 24px;max-width:800px}
+li{margin:6px 0}
+.back-link{color:var(--heading);text-decoration:none;font-size:0.9em;display:inline-block;margin-bottom:20px}
+.back-link:hover{text-decoration:underline}
+.severity{display:inline-block;padding:2px 10px;border-radius:12px;font-size:0.75em;font-weight:bold;margin-right:8px}
+.s-p0{background:var(--red);color:#000}
+.s-p1{background:var(--accent);color:#000}
+.s-p2{background:var(--yellow);color:#000}
+.s-p3{background:var(--purple);color:#000}
+.issue{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:8px;padding:16px 20px;margin:16px 0;max-width:800px}
+.issue.warn{border-left-color:var(--accent)}
+.issue.info{border-left-color:var(--heading)}
+.issue h4{margin-top:0}
+table{border-collapse:collapse;width:100%;max-width:800px;margin:16px 0}
+th,td{border:1px solid var(--border);padding:10px 14px;text-align:left;font-size:0.92em}
+th{background:var(--surface);color:var(--heading);font-weight:600}
+tr:hover{background:var(--surface)}
+.summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin:20px 0;max-width:800px}
+.summary-box h3{margin-top:0}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.8em;margin-right:4px}
+.tag-arch{background:#1f6feb33;color:var(--heading)}
+.tag-prompt{background:#f0883e33;color:var(--accent)}
+.tag-tool{background:#3fb95033;color:var(--green)}
+footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#666;font-size:0.85em}
+</style>
+</head>
+<body>
+<a href="index.html" class="back-link">← 返回文档首页</a>
+<h1>Agent 智能水平分析与提升方案</h1>
+<p style="color:#8b949e">对 Agent Swarm 系统中各 Agent 的"大脑"层进行全面审计，识别瓶颈并给出改进路线图。</p>
+
+<div class="summary-box">
+<h3>核心结论</h3>
+<p>基础设施（容器池、A2A 协议、注册中心、熔断器）搭建完整，但 Agent 的<b style="color:var(--red)">"大脑"是空心化的</b>——prompt 简陋、无规划、无验证、无协作、串行执行。称之为 "swarm" 名不副实，本质是一个串行的"LLM + file tools"远程调用。</p>
+</div>
+
+<h2>一、Orchestrator 层问题（编排器）</h2>
+
+<div class="issue">
+<h4><span class="severity s-p0">P0</span> 没有任务规划（Planning）</h4>
+<p><code>orchestrator.py</code> 的 system prompt（L26-59）只说"分析请求→选 agent→dispatch→finalize"，但<b>没有结构化的推理框架</b>。没有要求 LLM 先输出任务分解计划，直接就跳到 dispatch。</p>
+<p><b>当前</b>：用户说"做一个前后端分离的 TODO app"→ orchestrator 直接 dispatch frontend + backend，任务描述靠 LLM 临场发挥。</p>
+<p><b>应该是</b>：先输出结构化计划（需求分析、技术选型、API 契约定义、前后端任务拆分），然后基于计划 dispatch。</p>
+</div>
+
+<div class="issue">
+<h4><span class="severity s-p0">P0</span> 纯串行执行，没有并行</h4>
+<p><code>_tool_dispatch_agent</code> 使用 <code>blocking=True</code>（L351），每次 dispatch 一个 worker 就<b>阻塞等待</b>完成。前端和后端无法并行。</p>
+<p>一个"swarm"系统，agent 却是一个一个串行跑的。</p>
+</div>
+
+<div class="issue">
+<h4><span class="severity s-p0">P0</span> 没有 Agent 间协作</h4>
+<p>Workers 互相完全不知道对方在干什么：</p>
+<ul>
+  <li>前端 agent 不知道后端 agent 的 API 定义</li>
+  <li>后端 agent 不知道前端 agent 需要什么接口</li>
+  <li>没有 shared context / API contract / design doc</li>
+</ul>
+<p><b>缺失</b>：一个 contract 定义环节（orchestrator 先生成 API spec，然后同时传给前端和后端）。</p>
+</div>
+
+<div class="issue">
+<h4><span class="severity s-p1">P1</span> 没有质量验证</h4>
+<p>Orchestrator 的 <code>finalize</code> 工具（L434-437）只是把 LLM 输出的 summary 原样返回。没有验证产物文件是否存在、代码能否运行、前后端接口是否匹配。</p>
+</div>
+
+<div class="issue warn">
+<h4>上下文管理粗糙</h4>
+<ul>
+  <li><code>max_iterations = 15</code>（L218）硬编码，不管任务简单还是复杂</li>
+  <li>最后 3 轮强制 finalize（L225-231），粗暴打断</li>
+  <li><code>max_tokens=4096</code>（L241），对复杂任务严重不足</li>
+  <li><code>temperature=0.1</code>（L239），过于保守</li>
+</ul>
+</div>
+
+<h2>二、Worker 层问题（执行 Agent）</h2>
+
+<div class="issue">
+<h4><span class="severity s-p0">P0</span> System Prompt 极其简陋</h4>
+<p>三个 agent 的 prompt（<code>worker.py</code> L80-117）每个只有 ~10 行，内容是泛泛的"你是前端/后端/通用 agent，用 write_file 写文件"。</p>
+<p><b>缺失</b>：领域知识注入、few-shot examples、输出质量要求、代码规范约束、reasoning 指引。</p>
+</div>
+
+<div class="issue">
+<h4><span class="severity s-p1">P1</span> 工具集太弱</h4>
+<p>Worker 只有 4 个工具，且 path 处理有严重 hack：</p>
+<table>
+<tr><th>工具</th><th>问题</th></tr>
+<tr><td><code>write_file</code></td><td><code>Path(args["path"]).name</code> 强制只取文件名（L364），<b>无法创建子目录</b></td></tr>
+<tr><td><code>read_file</code></td><td>同样被 strip 到文件名，只能读当前 role 目录</td></tr>
+<tr><td><code>list_directory</code></td><td>无参数选择，硬编码只列 role 目录</td></tr>
+<tr><td><code>run_command</code></td><td>没有安全限制，输出截断到 5000 字符</td></tr>
+</table>
+<p><b>缺失</b>：代码搜索、依赖安装、代码格式化、测试运行、git、HTTP 请求工具。</p>
+</div>
+
+<div class="issue">
+<h4><span class="severity s-p1">P1</span> 没有自我验证</h4>
+<p>Worker 的 <code>call_llm</code>（L243-352）是一个朴素的 tool-calling 循环。LLM 写完文件就直接返回。没有"写完代码后运行测试验证"的步骤。</p>
+</div>
+
+<div class="issue warn">
+<h4>其他 Worker 问题</h4>
+<ul>
+  <li><b>没有迭代精化</b>：20 轮迭代限制但无机制鼓励多轮优化</li>
+  <li><b>没有进度反馈</b>：全程阻塞，不汇报中间状态</li>
+  <li><b>没有错误恢复</b>：tool call 失败无结构化重试</li>
+</ul>
+</div>
+
+<h2>三、架构级问题</h2>
+
+<div class="issue">
+<h4><span class="severity s-p0">P0</span> 大量死代码 / 未接线模块</h4>
+<table>
+<tr><th>模块</th><th>状态</th></tr>
+<tr><td><code>src/resilience/circuit_breaker.py</code></td><td>完整实现，<b style="color:var(--red)">从未被引用</b></td></tr>
+<tr><td><code>src/adapters/</code> (OpenAI/CLI/MCP)</td><td>完整实现，<b style="color:var(--red)">未接入 orchestration</b></td></tr>
+<tr><td><code>src/registry/</code> (Redis)</td><td>完整实现，<b style="color:var(--red)">未用于 agent 发现</b></td></tr>
+<tr><td><code>src/swarm_sdk/</code></td><td>SDK 客户端，<b style="color:var(--red)">未使用</b></td></tr>
+<tr><td><code>src/gateway/</code></td><td>注册 API，<b style="color:var(--red)">未接入</b></td></tr>
+<tr><td><code>main.py</code> L57</td><td><code>AdapterManager(registry=registry)</code> — 参数不存在，<b style="color:var(--red)">会报错</b></td></tr>
+</table>
+</div>
+
+<div class="issue warn">
+<h4>其他架构问题</h4>
+<ul>
+  <li><b>没有错误恢复/重试</b>：Worker 失败后 orchestrator 不 retry</li>
+  <li><b>没有记忆/学习</b>：每个任务从零开始，不保留模板或经验</li>
+  <li><b>阻塞式 A2A</b>：只使用 blocking 模式，无流式</li>
+</ul>
+</div>
+
+<h2>四、提升路线图（按优先级）</h2>
+
+<table>
+<tr><th>优先级</th><th>改进方向</th><th>影响</th><th>难度</th></tr>
+<tr><td><span class="severity s-p0">P0</span></td><td><b>Orchestrator 加 Planning 阶段</b>：先生成结构化任务计划（API contract + 技术选型 + 子任务拆分），再 dispatch</td><td>极大提升协作质量</td><td>中</td></tr>
+<tr><td><span class="severity s-p0">P0</span></td><td><b>并行 dispatch + 共享 context</b>：前端/后端并行运行，共享 API contract 文档</td><td>真正的 swarm，速度翻倍</td><td>中</td></tr>
+<tr><td><span class="severity s-p0">P0</span></td><td><b>Worker prompt 大幅增强</b>：注入领域知识、best practice、输出规范、few-shot examples</td><td>代码质量直接提升</td><td>低</td></tr>
+<tr><td><span class="severity s-p1">P1</span></td><td>Worker 加自我验证环节：写完代码后自动运行/检查</td><td>减少不可用产物</td><td>中</td></tr>
+<tr><td><span class="severity s-p1">P1</span></td><td>去掉 path strip hack，允许子目录</td><td>能做真实项目</td><td>低</td></tr>
+<tr><td><span class="severity s-p1">P1</span></td><td>加 review agent 检查产出质量</td><td>质量保证层</td><td>中</td></tr>
+<tr><td><span class="severity s-p1">P1</span></td><td>接线死代码：circuit breaker、adapter manager、registry</td><td>系统韧性</td><td>低</td></tr>
+<tr><td><span class="severity s-p2">P2</span></td><td>非阻塞 A2A + 流式进度</td><td>用户体验</td><td>中</td></tr>
+<tr><td><span class="severity s-p2">P2</span></td><td>动态模型参数（根据任务复杂度调整）</td><td>适应性</td><td>低</td></tr>
+<tr><td><span class="severity s-p2">P2</span></td><td>跨任务记忆：保存成功的 prompt 和代码模板</td><td>渐进提升</td><td>高</td></tr>
+<tr><td><span class="severity s-p3">P3</span></td><td>Agent 间直接通信：前端 agent 能向后端 agent 提问</td><td>真正的协作 swarm</td><td>高</td></tr>
+</table>
+
+<div class="summary-box">
+<h3>审计范围</h3>
+<ul style="margin-top:8px">
+  <li><code>src/orchestrator/orchestrator.py</code> — 编排器（437 行）</li>
+  <li><code>src/agents/worker.py</code> — Worker Agent（432 行）</li>
+  <li><code>src/common/a2a_client.py</code> — A2A 协议客户端（161 行）</li>
+  <li><code>src/container_pool/pool.py</code> — 容器池管理（306 行）</li>
+  <li><code>src/task_manager/manager.py</code> — 任务管理（171 行）</li>
+  <li><code>src/adapters/</code> — OpenAI/CLI/MCP 适配器</li>
+  <li><code>src/resilience/circuit_breaker.py</code> — 熔断器（未接线）</li>
+  <li><code>src/registry/registry.py</code> — Redis 注册中心（未接线）</li>
+  <li><code>src/gateway/routes.py</code> — Gateway API（未接线）</li>
+  <li><code>src/swarm_sdk/client.py</code> — SDK 客户端（未使用）</li>
+  <li><code>src/main.py</code> + <code>src/api/routes.py</code> — 入口与路由</li>
+  <li><code>config/default.yaml</code> — 全局配置</li>
+</ul>
+</div>
+
+<footer>
+<p>审计日期：2026-06-14 | 审计方法：全库源码逐文件阅读分析</p>
+</footer>
+</body>
+</html>
