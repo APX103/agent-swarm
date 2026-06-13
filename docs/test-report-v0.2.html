@@ -3,490 +3,667 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Swarm v0.2 - 测试报告</title>
+<title>测试报告 v0.2 — External Agent Adapter | Agent Swarm</title>
 <style>
-  :root {
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #c9d1d9; --text2: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --orange: #d29922; --red: #f85149;
-    --purple: #bc8cff; --cyan: #39d2c0;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
-  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
-  h1 { font-size: 2em; margin-bottom: 8px; color: #fff; }
-  h1 span { color: var(--green); }
-  .meta { color: var(--text2); margin-bottom: 40px; font-size: 0.9em; }
-  h2 { color: #fff; font-size: 1.4em; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
-  h3 { color: var(--accent); font-size: 1.05em; margin: 24px 0 12px; }
+:root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2128;--border:#30363d;--text:#c9d1d9;--text2:#8b949e;--heading:#58a6ff;--accent:#f0883e;--green:#3fb950;--red:#f85149;--yellow:#d29922;--purple:#bc8cff;--cyan:#39d2c0}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.8;padding:40px 20px}
+.container{max-width:1100px;margin:0 auto}
 
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 24px 0; }
-  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; }
-  .summary-card .number { font-size: 2.5em; font-weight: 700; line-height: 1.2; }
-  .summary-card .label { font-size: 0.85em; color: var(--text2); margin-top: 4px; }
-  .summary-card.green .number { color: var(--green); }
-  .summary-card.blue .number { color: var(--accent); }
-  .summary-card.purple .number { color: var(--purple); }
-  .summary-card.cyan .number { color: var(--cyan); }
+/* Header */
+.report-header{text-align:center;padding:40px 0 30px;border-bottom:1px solid var(--border);margin-bottom:40px}
+.report-header h1{color:var(--heading);font-size:2em;font-weight:700;margin-bottom:6px}
+.report-header .subtitle{color:var(--text2);font-size:1em}
+.report-header .version-tag{display:inline-block;background:var(--accent);color:#000;padding:3px 14px;border-radius:16px;font-size:0.8em;font-weight:700;margin-left:8px}
 
-  .progress-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; height: 24px; overflow: hidden; margin: 16px 0 8px; }
-  .progress-fill { height: 100%; background: linear-gradient(90deg, #238636, var(--green)); border-radius: 8px; transition: width 0.5s; }
+/* Summary Cards */
+.summary-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;margin-bottom:40px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 16px;text-align:center;transition:border-color .2s,transform .2s}
+.stat-card:hover{border-color:var(--heading);transform:translateY(-2px)}
+.stat-card .number{font-size:2.4em;font-weight:800;line-height:1.2}
+.stat-card .label{color:var(--text2);font-size:0.85em;margin-top:4px}
+.stat-passed .number{color:var(--green)}
+.stat-failed .number{color:var(--red)}
+.stat-errors .number{color:var(--yellow)}
+.stat-time .number{color:var(--cyan)}
+.stat-modules .number{color:var(--purple)}
+.stat-e2e .number{color:var(--accent)}
 
-  .module-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin: 24px 0; }
-  .module-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  .module-header { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-  .module-header h4 { margin: 0; color: #fff; font-size: 0.95em; }
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
-  .badge-green { background: rgba(63,185,80,0.15); color: var(--green); }
-  .module-body { padding: 8px 0; max-height: 300px; overflow-y: auto; }
-  .test-row { padding: 5px 18px; font-size: 0.82em; display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
-  .test-row:hover { background: rgba(88,166,255,0.04); }
-  .status-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.9em; flex-shrink: 0; }
-  .status-pass { color: var(--green); }
-  .status-fail { color: var(--red); }
+/* Progress bar */
+.progress-wrap{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:40px}
+.progress-bar-bg{width:100%;height:28px;background:#21262d;border-radius:14px;overflow:hidden;display:flex}
+.progress-bar-passed{background:linear-gradient(90deg,#238636,#3fb950);height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.75em;font-weight:700;min-width:40px}
+.progress-bar-failed{background:var(--red);height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.75em;font-weight:700;min-width:0}
+.progress-legend{display:flex;gap:20px;margin-top:10px;font-size:0.85em;color:var(--text2)}
+.progress-legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.legend-passed::before{background:var(--green)}
+.legend-failed::before{background:var(--red)}
+.legend-errors::before{background:var(--yellow)}
 
-  .section-tag { display: inline-block; padding: 4px 12px; border-radius: 6px; font-size: 0.8em; font-weight: 600; margin-bottom: 12px; }
-  .tag-new { background: rgba(63,185,80,0.15); color: var(--green); }
-  .tag-existing { background: rgba(88,166,255,0.12); color: var(--accent); }
+/* Sections */
+h2{color:var(--heading);font-size:1.4em;margin:40px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+h3{color:var(--accent);font-size:1.1em;margin:24px 0 10px}
+p.desc{color:var(--text2);font-size:0.95em;margin-bottom:16px;max-width:800px}
 
-  .feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin: 24px 0; }
-  .feature-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
-  .feature-card h4 { color: var(--cyan); margin-bottom: 8px; }
-  .feature-card ul { padding-left: 18px; font-size: 0.9em; }
-  .feature-card li { margin-bottom: 4px; }
+/* Module table */
+.module-table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px}
+.module-table thead{background:#21262d}
+.module-table th{padding:12px 16px;text-align:left;font-size:0.85em;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.module-table td{padding:10px 16px;font-size:0.9em;border-top:1px solid var(--border)}
+.module-table tbody tr:hover{background:var(--surface2)}
+.module-table .mod-name{font-family:'SF Mono',Consolas,monospace;color:var(--cyan);font-size:0.85em}
+.module-table .pass-count{color:var(--green);font-weight:700}
 
-  .new-files { margin: 24px 0; }
-  .file-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 0.9em; border-bottom: 1px solid var(--border); }
-  .file-item:last-child { border-bottom: none; }
-  .file-path { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 0.85em; }
-  .file-desc { color: var(--text2); }
+/* E2E Phase */
+.phase-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:16px;border-left:4px solid var(--accent);transition:border-color .2s}
+.phase-card:hover{border-left-color:var(--heading)}
+.phase-card .phase-header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.phase-card .phase-num{background:var(--accent);color:#000;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.85em;flex-shrink:0}
+.phase-card .phase-title{font-weight:700;font-size:1.05em;color:var(--text)}
+.phase-card .phase-desc{color:var(--text2);font-size:0.9em;margin-bottom:14px}
+.phase-card ul{list-style:none;padding:0}
+.phase-card li{padding:5px 0;font-size:0.88em;display:flex;align-items:center;gap:8px}
+.phase-card li .icon{flex-shrink:0}
+.phase-card li .test-name{font-family:'SF Mono',Consolas,monospace;color:var(--cyan);font-size:0.85em}
+.phase-card li .status-badge{margin-left:auto;flex-shrink:0}
+.badge-pass{background:#23863633;color:var(--green);padding:1px 8px;border-radius:10px;font-size:0.75em;font-weight:600}
 
-  @media (max-width: 700px) {
-    .summary-grid { grid-template-columns: repeat(2, 1fr); }
-    .container { padding: 20px 16px; }
-  }
+/* Test plan */
+.plan-phase{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;margin-bottom:16px}
+.plan-phase .plan-header{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.plan-phase .plan-num{background:var(--purple);color:#000;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.85em;flex-shrink:0}
+.plan-phase .plan-title{font-weight:700;font-size:1.05em}
+.plan-phase .plan-desc{color:var(--text2);font-size:0.9em}
+.plan-phase .plan-details{margin-top:10px;padding-left:44px}
+.plan-phase .plan-details li{font-size:0.88em;margin-bottom:4px;color:var(--text2)}
+.plan-phase .plan-details li strong{color:var(--text)}
+
+/* Collapsible test list */
+.collapsible-header{cursor:pointer;display:flex;align-items:center;gap:8px;padding:8px 0;user-select:none}
+.collapsible-header:hover{color:var(--heading)}
+.collapsible-header .arrow{transition:transform .2s;font-size:0.7em;color:var(--text2)}
+.collapsible-header .arrow.open{transform:rotate(90deg)}
+.collapsible-body{display:none}
+.collapsible-body.open{display:block}
+.test-list{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px 0;margin-bottom:12px;max-height:400px;overflow-y:auto}
+.test-list li{padding:4px 16px;font-size:0.85em;font-family:'SF Mono',Consolas,monospace;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)00}
+.test-list li:last-child{border-bottom:none}
+.test-list li:hover{background:var(--surface2)}
+.test-list li .pass-icon{color:var(--green);font-size:0.9em}
+
+/* Environment info */
+.env-table{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;width:100%;border-collapse:collapse}
+.env-table td{padding:8px 16px;font-size:0.88em;border-top:1px solid var(--border)}
+.env-table td:first-child{color:var(--text2);width:140px;font-weight:600}
+
+/* Warnings */
+.warn-box{background:#d299221a;border:1px solid #d2992244;border-radius:8px;padding:14px 20px;font-size:0.88em;color:var(--yellow);margin-bottom:16px}
+
+/* Footer */
+.footer{text-align:center;margin-top:60px;padding-top:20px;border-top:1px solid var(--border);color:#484f58;font-size:0.85em}
+
+/* Responsive */
+@media(max-width:700px){
+  .summary-row{grid-template-columns:repeat(3,1fr)}
+  .container{padding:20px 12px}
+  body{padding:20px 10px}
+}
 </style>
 </head>
 <body>
 <div class="container">
 
-<h1>Agent Swarm v0.2 <span>测试报告</span></h1>
-<div class="meta">外部 Agent 动态接入 · 2026-06-13 · 全量回归测试</div>
+<!-- Header -->
+<div class="report-header">
+  <h1>测试报告 <span class="version-tag">v0.2</span></h1>
+  <div class="subtitle">External Agent Adapter 功能 — 端到端测试与单元测试验证</div>
+  <div class="subtitle" style="margin-top:4px;font-size:0.85em">2026-06-13 · NVIDIA DGX Spark</div>
+</div>
 
 <!-- Summary -->
-<div class="summary-grid">
-  <div class="summary-card green">
-    <div class="number">120</div>
-    <div class="label">总测试数</div>
+<div class="summary-row">
+  <div class="stat-card stat-passed"><div class="number">156</div><div class="label">通过 (Passed)</div></div>
+  <div class="stat-card stat-failed"><div class="number">0</div><div class="label">失败 (Failed)</div></div>
+  <div class="stat-card stat-errors"><div class="number">0</div><div class="label">错误 (Errors)</div></div>
+  <div class="stat-card stat-time"><div class="number">30.90s</div><div class="label">总耗时</div></div>
+  <div class="stat-card stat-modules"><div class="number">11</div><div class="label">测试模块</div></div>
+  <div class="stat-card stat-e2e"><div class="number">27</div><div class="label">E2E 测试</div></div>
+</div>
+
+<!-- Progress bar -->
+<div class="progress-wrap">
+  <div class="progress-bar-bg">
+    <div class="progress-bar-passed" style="width:100%">156 / 156 ✓ 全部通过</div>
   </div>
-  <div class="summary-card green">
-    <div class="number">120</div>
-    <div class="label">✅ 通过</div>
-  </div>
-  <div class="summary-card purple">
-    <div class="number">91</div>
-    <div class="label">🆕 新增测试</div>
-  </div>
-  <div class="summary-card cyan">
-    <div class="number">30.83s</div>
-    <div class="label">⏱ 执行时间</div>
+  <div class="progress-legend">
+    <span class="legend-passed">通过 156</span>
+    <span class="legend-failed">失败 0</span>
+    <span class="legend-errors">错误 0</span>
   </div>
 </div>
 
-<div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
-<div style="color: var(--text2); font-size: 0.85em;">通过率 100% · 0 失败 · 0 错误</div>
-
-<!-- Feature overview -->
-<h2>功能概览</h2>
-
-<div class="feature-grid">
-  <div class="feature-card">
-    <h4>🔄 Redis 注册中心</h4>
-    <ul>
-      <li>Agent 自注册（TTL + 心跳续约）</li>
-      <li>按技能索引查询（Redis SET）</li>
-      <li>Pub/Sub 实时上下线通知</li>
-      <li>TTL 过期自动注销</li>
-      <li>health_sweep 清理孤儿数据</li>
-    </ul>
-  </div>
-  <div class="feature-card">
-    <h4>🔌 Agent 适配器</h4>
-    <ul>
-      <li>OpenAI API 适配器（/v1/chat/completions）</li>
-      <li>CLI 适配器（子进程 stdin/stdout）</li>
-      <li>MCP 适配器（JSON-RPC 2.0）</li>
-      <li>AdapterManager 路由工厂</li>
-      <li>统一 AgentBackend 接口</li>
-    </ul>
-  </div>
-  <div class="feature-card">
-    <h4>🛡 Circuit Breaker</h4>
-    <ul>
-      <li>三状态机：CLOSED → OPEN → HALF_OPEN</li>
-      <li>滑动窗口失败率检测</li>
-      <li>慢调用检测（slow_call_threshold）</li>
-      <li>自动恢复探测</li>
-      <li>手动 reset 强制恢复</li>
-    </ul>
-  </div>
-  <div class="feature-card">
-    <h4>🌐 Gateway API</h4>
-    <ul>
-      <li>POST /api/v1/agents/register</li>
-      <li>POST /api/v1/agents/{id}/heartbeat</li>
-      <li>POST /api/v1/agents/{id}/deregister</li>
-      <li>GET /api/v1/agents?skill=xxx</li>
-      <li>POST /api/v1/agents/{id}/invoke</li>
-    </ul>
-  </div>
-  <div class="feature-card">
-    <h4>📦 swarm-sdk</h4>
-    <ul>
-      <li>AgentClient 异步 HTTP 客户端</li>
-      <li>async context manager 自动注销</li>
-      <li>start_heartbeat_loop 后台心跳</li>
-      <li>register / heartbeat / deregister</li>
-    </ul>
-  </div>
-  <div class="feature-card">
-    <h4>⚙️ 配置扩展</h4>
-    <ul>
-      <li>RedisConfig（url, ttl, interval）</li>
-      <li>main.py 生命周期集成</li>
-      <li>Gateway router 自动挂载</li>
-      <li>Redis 连接失败优雅降级</li>
-    </ul>
-  </div>
-</div>
-
-<!-- Test modules -->
-<h2>测试模块详情</h2>
-
-<div class="module-grid">
-
-  <!-- test_registry -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_registry <span class="section-tag tag-new">NEW</span></h4>
-      <span class="badge badge-green">20/20 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_registry_initialization</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_with_skills</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_heartbeat_renews_ttl</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_heartbeat_unknown_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_deregister_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_agent_exists</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_agent_not_found</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_agents</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_agents_empty</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_find_by_skill</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_find_by_skill_no_match</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_health_sweep</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_health_sweep_no_orphans</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_without_redis</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_connect_idempotent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_default_values</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_heartbeat_updates_last_heartbeat_value</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_deregister_nonexistent_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_close_cleans_up</div>
-    </div>
-  </div>
-
-  <!-- test_adapters -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_adapters <span class="section-tag tag-new">NEW</span></h4>
-      <span class="badge badge-green">54/54 ✅</span>
-    </div>
-    <div class="module-body">
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">TestOpenAIAdapter (8)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_invoke_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_invoke_http_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_invoke_request_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_health_check_ok</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_health_check_fallback</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_health_check_fail</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_name</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_openai_adapter_capabilities</div>
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">TestCLIAdapter (9)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_invoke_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_invoke_json_output</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_invoke_nonzero_exit</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_invoke_timeout</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_invoke_file_not_found</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_health_check_exists</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_health_check_missing</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_name</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_cli_adapter_capabilities</div>
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">TestMCPAdapter (10)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_invoke_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_invoke_error_field</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_invoke_is_error_true</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_invoke_http_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_invoke_with_resource_artifacts</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_health_check_ok</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_health_check_error_response</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_health_check_exception</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_name</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_mcp_adapter_capabilities</div>
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">TestAdapterManager (9)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_register_get</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_unregister</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_list_agents</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_register_from_info</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_create_openai</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_create_cli</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_create_mcp</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_create_a2a</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_adapter_manager_create_unknown_protocol</div>
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">TestCircuitBreaker (12)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_closed</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_closed_allows_calls</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_opens_on_failures</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_rejects_when_open</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_half_open_recovers</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_half_open_failure_reopens</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_slow_call_detected</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_reset</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_timeout_elapsed</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_breaker_call_passes_args</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_open_error_is_exception</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_circuit_state_enum</div>
-      <h3 style="padding: 4px 18px; font-size: 0.78em; color: var(--text2);">AgentResult / AgentCapabilities (5)</h3>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_success_result</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_error_result</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_result_with_artifacts</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_defaults</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_with_values</div>
-    </div>
-  </div>
-
-  <!-- test_gateway -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_gateway <span class="section-tag tag-new">NEW</span></h4>
-      <span class="badge badge-green">17/17 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_defaults</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_missing_name</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_missing_endpoint</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_empty_body</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_register_agent_server_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_heartbeat_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_heartbeat_unknown_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_deregister_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_deregister_unknown_agent</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_agents</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_agents_by_skill</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_invoke_agent_success</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_invoke_agent_not_found</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_invoke_agent_missing_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_invoke_agent_invoke_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_deps_not_set</div>
-    </div>
-  </div>
-
-  <!-- test_config (existing) -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_config <span class="section-tag tag-existing">v0.1</span></h4>
-      <span class="badge badge-green">4/4 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_load_default_config</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_load_custom_config</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_load_nonexistent_config</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_agent_card_definitions</div>
-    </div>
-  </div>
-
-  <!-- test_container_pool (existing) -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_container_pool <span class="section-tag tag-existing">v0.1</span></h4>
-      <span class="badge badge-green">4/4 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_pool_initialization</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_checkout_return_cycle</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_checkout_when_pool_empty</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_status</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_shutdown_empty_pool</div>
-    </div>
-  </div>
-
-  <!-- test_task_manager (existing) -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_task_manager <span class="section-tag tag-existing">v0.1</span></h4>
-      <span class="badge badge-green">9/9 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_create_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_nonexistent_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_update_status</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_complete_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_fail_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_tasks</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_event_subscription</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_create_artifact_zip</div>
-    </div>
-  </div>
-
-  <!-- test_a2a (existing) -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_a2a <span class="section-tag tag-existing">v0.1</span></h4>
-      <span class="badge badge-green">6/6 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_agent_card</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_agent_card_failure</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_send_message_blocking</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_send_message_error</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_message_format</div>
-    </div>
-  </div>
-
-  <!-- test_api (existing) -->
-  <div class="module-card">
-    <div class="module-header">
-      <h4>test_api <span class="section-tag tag-existing">v0.1</span></h4>
-      <span class="badge badge-green">4/4 ✅</span>
-    </div>
-    <div class="module-body">
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_chat_creates_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_task</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_get_task_not_found</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_list_agents</div>
-      <div class="test-row"><span class="status-icon status-pass">✓</span> test_health</div>
-    </div>
-  </div>
-
-</div>
-
-<!-- New files -->
-<h2>新增文件清单</h2>
-
-<div class="new-files">
-  <div class="file-item">
-    <span class="file-path">src/registry/__init__.py</span>
-    <span class="file-desc">— Redis 注册中心包</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/registry/models.py</span>
-    <span class="file-desc">— AgentRegistration / AgentInfo / AgentCapabilities</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/registry/registry.py</span>
-    <span class="file-desc">— AgentRegistry（Redis TTL + Pub/Sub + Skills 索引）</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/__init__.py</span>
-    <span class="file-desc">— Agent 适配器包</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/base.py</span>
-    <span class="file-desc">— AgentBackend 抽象基类 + AgentResult</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/openai_adapter.py</span>
-    <span class="file-desc">— OpenAI API 适配器</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/cli_adapter.py</span>
-    <span class="file-desc">— CLI 子进程适配器</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/mcp_adapter.py</span>
-    <span class="file-desc">— MCP JSON-RPC 适配器</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/adapters/adapter_manager.py</span>
-    <span class="file-desc">— 适配器路由工厂</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/resilience/__init__.py</span>
-    <span class="file-desc">— 健壮性模块包</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/resilience/circuit_breaker.py</span>
-    <span class="file-desc">— CircuitBreaker 三状态机</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/gateway/__init__.py</span>
-    <span class="file-desc">— Gateway API 包</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/gateway/routes.py</span>
-    <span class="file-desc">— /api/v1/agents 注册/心跳/查询/调用</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/swarm_sdk/__init__.py</span>
-    <span class="file-desc">— Agent SDK 包</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">src/swarm_sdk/client.py</span>
-    <span class="file-desc">— AgentClient + start_heartbeat_loop</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">tests/test_registry.py</span>
-    <span class="file-desc">— 20 个注册中心测试（FakeRedis mock）</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">tests/test_adapters.py</span>
-    <span class="file-desc">— 54 个适配器+熔断器测试</span>
-  </div>
-  <div class="file-item">
-    <span class="file-path">tests/test_gateway.py</span>
-    <span class="file-desc">— 17 个 Gateway API 测试</span>
-  </div>
-</div>
-
-<!-- Test plan -->
-<h2>测试方案说明</h2>
-
-<table style="margin: 16px 0; font-size: 0.9em; width: 100%;">
-  <tr><th>测试策略</th><th>方法</th><th>覆盖范围</th></tr>
-  <tr>
-    <td><strong>单元测试</strong></td>
-    <td>unittest.mock + FakeRedis 内存模拟</td>
-    <td>Registry CRUD、TTL 续约、Skills 索引、Pub/Sub 通知</td>
-  </tr>
-  <tr>
-    <td><strong>适配器测试</strong></td>
-    <td>mock httpx / subprocess / shutil</td>
-    <td>OpenAI/CLI/MCP 适配器 invoke + health_check；AdapterManager 工厂路由</td>
-  </tr>
-  <tr>
-    <td><strong>熔断器测试</strong></td>
-    <td>直接调用 CircuitBreaker，时间控制</td>
-    <td>CLOSED→OPEN→HALF_OPEN 状态转换、慢调用检测、reset</td>
-  </tr>
-  <tr>
-    <td><strong>API 集成测试</strong></td>
-    <td>FastAPI TestClient + mock 依赖</td>
-    <td>Gateway 全部 6 个端点：注册、心跳、注销、列表、查询、调用</td>
-  </tr>
-  <tr>
-    <td><strong>回归测试</strong></td>
-    <td>全量 v0.1 测试重跑</td>
-    <td>29 个旧测试 + config/container_pool/task_manager/a2a/api 全部通过</td>
-  </tr>
+<!-- Environment -->
+<h2>🖥️ 测试环境</h2>
+<table class="env-table">
+  <tr><td>平台</td><td>Linux (6.17.0-1014-nvidia)</td></tr>
+  <tr><td>Python</td><td>3.12.3</td></tr>
+  <tr><td>测试框架</td><td>pytest 9.0.3</td></tr>
+  <tr><td>插件</td><td>anyio-4.13.0, respx-0.23.1, asyncio-1.4.0</td></tr>
+  <tr><td>配置文件</td><td>pyproject.toml</td></tr>
+  <tr><td>根目录</td><td>/home/apx103/work/swarm</td></tr>
+  <tr><td>异步模式</td><td>Mode.AUTO</td></tr>
 </table>
 
-<div style="text-align: center; margin-top: 40px; color: var(--text2); font-size: 0.85em;">
-  <p>运行命令：<code style="background: var(--surface); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px;">cd /home/apx103/work/swarm && .venv/bin/python -m pytest tests/ -v</code></p>
-  <p style="margin-top: 8px;">报告生成时间：2026-06-13 · pytest 9.0.3 · Python 3.12.3</p>
+<!-- Warnings -->
+<h2>⚠️ 警告</h2>
+<div class="warn-box">
+  <strong>2 个警告</strong>（均为非阻塞性问题）：
+  <ol style="margin-top:8px;padding-left:20px">
+    <li><code>StarletteDeprecationWarning</code> — fastapi/testclient 中 <code>httpx</code> 已弃用，建议安装 <code>httpx2</code></li>
+    <li><code>RuntimeWarning</code> — CLI 适配器超时测试中协程未被 await（mock 行为，不影响测试结果）</li>
+  </ol>
+</div>
+
+<!-- ========== TEST PLAN ========== -->
+<h2>📋 测试计划</h2>
+<p class="desc">本次测试覆盖 External Agent Adapter 功能的完整生命周期，包含 11 个测试模块、7 个 E2E 阶段，共 156 个测试用例。</p>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">1</div>
+    <div class="plan-title">E2E 阶段一：Agent 注册（Registration）</div>
+  </div>
+  <div class="plan-desc">验证外部 Agent 的注册流程，包括 OpenAI、CLI、MCP 三种协议的注册，以及字段校验与事件触发。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>6 个测试 — test_register_openai_agent, test_register_cli_agent, test_register_mcp_agent, test_register_missing_name, test_register_missing_endpoint, test_register_creates_online_events</li>
+    <li><strong>验证目标：</strong>多协议注册正确性、必填字段校验、在线事件自动生成</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">2</div>
+    <div class="plan-title">E2E 阶段二：心跳保活（Heartbeat）</div>
+  </div>
+  <div class="plan-desc">验证 Agent 心跳机制，包括心跳成功刷新 TTL、时间戳更新、未知 Agent 的错误处理。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>3 个测试 — test_heartbeat_success, test_heartbeat_updates_timestamp, test_heartbeat_unknown_agent</li>
+    <li><strong>验证目标：</strong>心跳接口正确性、TTL 续期、异常路径处理</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">3</div>
+    <div class="plan-title">E2E 阶段三：Agent 查询（Query）</div>
+  </div>
+  <div class="plan-desc">验证已注册 Agent 的查询功能，包括列表查询、技能筛选、完整字段返回。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>4 个测试 — test_list_all_agents, test_find_by_skill, test_find_by_skill_no_match, test_agent_has_complete_fields</li>
+    <li><strong>验证目标：</strong>列表接口完整性、技能过滤准确性、字段完备性</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">4</div>
+    <div class="plan-title">E2E 阶段四：Agent 调用（Invocation）</div>
+  </div>
+  <div class="plan-desc">验证通过 API 调用外部 Agent 的完整流程，包括正常调用、缺失参数、Agent 不存在等场景。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>4 个测试 — test_invoke_openai_agent, test_invoke_missing_task, test_invoke_agent_not_found, test_invoke_returns_result</li>
+    <li><strong>验证目标：</strong>调用链路完整性、错误处理、结果返回格式</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">5</div>
+    <div class="plan-title">E2E 阶段五：Agent 注销（Deregistration）</div>
+  </div>
+  <div class="plan-desc">验证 Agent 注销流程，包括注销后心跳 404、列表中不可见、重复注销 404、离线事件触发。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>5 个测试 — test_deregister_success, test_deregistered_heartbeat_404, test_deregistered_not_in_list, test_double_deregister_404, test_offline_event</li>
+    <li><strong>验证目标：</strong>注销彻底性、状态一致性、事件系统正确性</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">6</div>
+    <div class="plan-title">E2E 阶段六：TTL 过期（TTL Expiration）</div>
+  </div>
+  <div class="plan-desc">验证 Agent TTL 过期后的自动清理机制，包括过期后心跳返回 404。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>2 个测试 — test_expired_agent_removed, test_expired_agent_heartbeat_404</li>
+    <li><strong>验证目标：</strong>定时清理机制、过期 Agent 的状态隔离</li>
+  </ul></div>
+</div>
+
+<div class="plan-phase">
+  <div class="plan-header">
+    <div class="plan-num">7</div>
+    <div class="plan-title">E2E 阶段七：重新注册（Re-registration）</div>
+  </div>
+  <div class="plan-desc">验证 Agent 重新注册的完整流程，包括新 Agent 注册、技能查询更新、连续心跳稳定性。</div>
+  <div class="plan-details"><ul>
+    <li><strong>覆盖范围：</strong>3 个测试 — test_reregister_new_agent, test_reregister_skill_query, test_consecutive_heartbeats</li>
+    <li><strong>验证目标：</strong>重新注册后状态一致性、技能更新、心跳稳定性</li>
+  </ul></div>
+</div>
+
+<!-- ========== E2E RESULTS ========== -->
+<h2>🔬 E2E External Agent 测试结果（27 个测试，7 个阶段）</h2>
+<p class="desc">以下展示端到端测试的详细结果，按生命周期阶段分组。所有 27 个 E2E 测试全部通过。</p>
+
+<!-- Phase 1: Registration -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">1</div>
+    <div class="phase-title">注册（Registration）— 6 个测试</div>
+  </div>
+  <div class="phase-desc">验证外部 Agent 注册流程：OpenAI / CLI / MCP 协议注册、字段校验、在线事件生成。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_openai_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_cli_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_mcp_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_missing_name</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_missing_endpoint</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_register_creates_online_events</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 2: Heartbeat -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">2</div>
+    <div class="phase-title">心跳保活（Heartbeat）— 3 个测试</div>
+  </div>
+  <div class="phase-desc">验证心跳机制：成功续期、时间戳更新、未知 Agent 错误处理。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_heartbeat_success</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_heartbeat_updates_timestamp</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_heartbeat_unknown_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 3: Query -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">3</div>
+    <div class="phase-title">查询（Query）— 4 个测试</div>
+  </div>
+  <div class="phase-desc">验证 Agent 查询功能：列表查询、技能筛选、无匹配结果、字段完整性。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_list_all_agents</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_find_by_skill</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_find_by_skill_no_match</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_agent_has_complete_fields</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 4: Invocation -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">4</div>
+    <div class="phase-title">调用（Invocation）— 4 个测试</div>
+  </div>
+  <div class="phase-desc">验证 Agent 调用链路：正常调用、缺失 task 参数、Agent 不存在、结果返回。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_invoke_openai_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_invoke_missing_task</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_invoke_agent_not_found</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_invoke_returns_result</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 5: Deregistration -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">5</div>
+    <div class="phase-title">注销（Deregistration）— 5 个测试</div>
+  </div>
+  <div class="phase-desc">验证 Agent 注销：注销成功、心跳 404、列表消失、重复注销 404、离线事件。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_deregister_success</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_deregistered_heartbeat_404</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_deregistered_not_in_list</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_double_deregister_404</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_offline_event</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 6: TTL -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">6</div>
+    <div class="phase-title">TTL 过期（TTL Expiration）— 2 个测试</div>
+  </div>
+  <div class="phase-desc">验证 TTL 过期机制：过期 Agent 自动清理、过期后心跳返回 404。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_expired_agent_removed</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_expired_agent_heartbeat_404</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Phase 7: Re-registration -->
+<div class="phase-card">
+  <div class="phase-header">
+    <div class="phase-num">7</div>
+    <div class="phase-title">重新注册（Re-registration）— 3 个测试</div>
+  </div>
+  <div class="phase-desc">验证重新注册流程：新 Agent 注册、技能查询更新、连续心跳稳定性。</div>
+  <ul>
+    <li><span class="icon">✓</span> <span class="test-name">test_reregister_new_agent</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_reregister_skill_query</span> <span class="status-badge badge-pass">PASSED</span></li>
+    <li><span class="icon">✓</span> <span class="test-name">test_consecutive_heartbeats</span> <span class="status-badge badge-pass">PASSED</span></li>
+  </ul>
+</div>
+
+<!-- ========== MODULE RESULTS ========== -->
+<h2>📦 全部模块测试结果（11 个模块，156 个测试）</h2>
+<p class="desc">按测试文件分组的完整测试结果概览。点击模块名展开查看每个测试的详细状态。</p>
+
+<table class="module-table">
+  <thead><tr><th>模块</th><th>测试数</th><th>通过</th><th>失败</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td class="mod-name">test_a2a</td><td>6</td><td class="pass-count">6</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_adapters</td><td>53</td><td class="pass-count">53</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_api</td><td>5</td><td class="pass-count">5</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_config</td><td>4</td><td class="pass-count">4</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_container_pool</td><td>5</td><td class="pass-count">5</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name" style="color:var(--accent);font-weight:700">test_e2e_external_agent ★</td><td>27</td><td class="pass-count">27</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_gateway</td><td>15</td><td class="pass-count">15</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_integration</td><td>5</td><td class="pass-count">5</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_orchestrator</td><td>3</td><td class="pass-count">3</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_registry</td><td>20</td><td class="pass-count">20</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+    <tr><td class="mod-name">test_task_manager</td><td>9</td><td class="pass-count">9</td><td>0</td><td style="color:var(--green)">✓ 全部通过</td></tr>
+  </tbody>
+</table>
+
+<!-- Detailed per-module test lists -->
+<h3>详细测试列表</h3>
+
+<!-- test_a2a -->
+<div class="collapsible-header" onclick="toggleSection('sec_a2a')">
+  <span class="arrow" id="arrow_a2a">▶</span> <strong>test_a2a</strong> — 6 个测试 (A2A 协议通信)
+</div>
+<div class="collapsible-body" id="sec_a2a">
+  <ul class="test-list">
+    <li><span>test_get_agent_card</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_agent_card_failure</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_send_message_blocking</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_send_message_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_message_format</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_adapters -->
+<div class="collapsible-header" onclick="toggleSection('sec_adapters')">
+  <span class="arrow" id="arrow_adapters">▶</span> <strong>test_adapters</strong> — 53 个测试 (适配器、管理器、熔断器)
+</div>
+<div class="collapsible-body" id="sec_adapters">
+  <ul class="test-list">
+    <li><span>TestOpenAIAdapter::test_openai_adapter_invoke_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_invoke_http_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_invoke_request_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_health_check_ok</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_health_check_fallback</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_health_check_fail</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_name</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestOpenAIAdapter::test_openai_adapter_capabilities</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_invoke_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_invoke_json_output</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_invoke_nonzero_exit</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_invoke_timeout</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_invoke_file_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_health_check_exists</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_health_check_missing</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_name</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCLIAdapter::test_cli_adapter_capabilities</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_invoke_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_invoke_error_field</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_invoke_is_error_true</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_invoke_http_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_invoke_with_resource_artifacts</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_health_check_ok</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_health_check_error_response</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_health_check_exception</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_name</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestMCPAdapter::test_mcp_adapter_capabilities</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_register_get</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_unregister</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_list_agents</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_register_from_info</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_create_openai</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_create_cli</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_create_mcp</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_create_unknown_protocol</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_create_a2a</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAdapterManager::test_adapter_manager_overwrite_warns</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_closed</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_closed_allows_calls</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_opens_on_failures</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_rejects_when_open</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_half_open_recovers</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_half_open_failure_reopens</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_slow_call_detected</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_reset</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_timeout_elapsed_opens_half_open</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_breaker_call_passes_args</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_open_error_is_exception</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestCircuitBreaker::test_circuit_state_enum</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAgentResult::test_success_result</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAgentResult::test_error_result</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAgentResult::test_result_with_artifacts</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAgentCapabilities::test_defaults</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestAgentCapabilities::test_with_values</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_api -->
+<div class="collapsible-header" onclick="toggleSection('sec_api')">
+  <span class="arrow" id="arrow_api">▶</span> <strong>test_api</strong> — 5 个测试 (FastAPI 接口)
+</div>
+<div class="collapsible-body" id="sec_api">
+  <ul class="test-list">
+    <li><span>test_chat_creates_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_task_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_agents</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_health</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_config -->
+<div class="collapsible-header" onclick="toggleSection('sec_config')">
+  <span class="arrow" id="arrow_config">▶</span> <strong>test_config</strong> — 4 个测试 (配置加载)
+</div>
+<div class="collapsible-body" id="sec_config">
+  <ul class="test-list">
+    <li><span>test_load_default_config</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_load_custom_config</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_load_nonexistent_config</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_agent_card_definitions</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_container_pool -->
+<div class="collapsible-header" onclick="toggleSection('sec_pool')">
+  <span class="arrow" id="arrow_pool">▶</span> <strong>test_container_pool</strong> — 5 个测试 (容器池管理)
+</div>
+<div class="collapsible-body" id="sec_pool">
+  <ul class="test-list">
+    <li><span>test_pool_initialization</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_checkout_return_cycle</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_checkout_when_pool_empty</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_status</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_shutdown_empty_pool</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_e2e_external_agent -->
+<div class="collapsible-header" onclick="toggleSection('sec_e2e')" style="color:var(--accent)">
+  <span class="arrow" id="arrow_e2e">▶</span> <strong>test_e2e_external_agent ★</strong> — 27 个测试 (E2E 外部 Agent 全生命周期)
+</div>
+<div class="collapsible-body" id="sec_e2e">
+  <ul class="test-list">
+    <li><span>TestE2ERegistration::test_register_openai_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ERegistration::test_register_cli_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ERegistration::test_register_mcp_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ERegistration::test_register_missing_name</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ERegistration::test_register_missing_endpoint</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ERegistration::test_register_creates_online_events</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EHeartbeat::test_heartbeat_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EHeartbeat::test_heartbeat_updates_timestamp</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EHeartbeat::test_heartbeat_unknown_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EQuery::test_list_all_agents</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EQuery::test_find_by_skill</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EQuery::test_find_by_skill_no_match</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EQuery::test_agent_has_complete_fields</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EInvocation::test_invoke_openai_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EInvocation::test_invoke_missing_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EInvocation::test_invoke_agent_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EInvocation::test_invoke_returns_result</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EDeregistration::test_deregister_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EDeregistration::test_deregistered_heartbeat_404</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EDeregistration::test_deregistered_not_in_list</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EDeregistration::test_double_deregister_404</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EDeregistration::test_offline_event</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ETTL::test_expired_agent_removed</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2ETTL::test_expired_agent_heartbeat_404</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EReregistration::test_reregister_new_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EReregistration::test_reregister_skill_query</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>TestE2EReregistration::test_consecutive_heartbeats</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_gateway -->
+<div class="collapsible-header" onclick="toggleSection('sec_gateway')">
+  <span class="arrow" id="arrow_gateway">▶</span> <strong>test_gateway</strong> — 15 个测试 (HTTP 网关)
+</div>
+<div class="collapsible-body" id="sec_gateway">
+  <ul class="test-list">
+    <li><span>test_register_agent_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_defaults</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_missing_name</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_missing_endpoint</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_empty_body</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_server_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_heartbeat_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_heartbeat_unknown_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_deregister_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_deregister_unknown_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_agents</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_agents_by_skill</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_invoke_agent_success</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_invoke_agent_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_invoke_agent_missing_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_invoke_agent_invoke_error</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_deps_not_set</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_integration -->
+<div class="collapsible-header" onclick="toggleSection('sec_integration')">
+  <span class="arrow" id="arrow_integration">▶</span> <strong>test_integration</strong> — 5 个测试 (集成测试)
+</div>
+<div class="collapsible-body" id="sec_integration">
+  <ul class="test-list">
+    <li><span>test_full_lifecycle_create_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_pool_startup_and_checkout</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_multi_tenant_isolation</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_orchestrator_simple_flow</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_task_zip_download</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_orchestrator -->
+<div class="collapsible-header" onclick="toggleSection('sec_orchestrator')">
+  <span class="arrow" id="arrow_orchestrator">▶</span> <strong>test_orchestrator</strong> — 3 个测试 (编排器)
+</div>
+<div class="collapsible-body" id="sec_orchestrator">
+  <ul class="test-list">
+    <li><span>test_orchestrator_simple_response</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_orchestrator_dispatch_tool</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_tool_list_artifacts</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_tool_read_artifacts_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_registry -->
+<div class="collapsible-header" onclick="toggleSection('sec_registry')">
+  <span class="arrow" id="arrow_registry">▶</span> <strong>test_registry</strong> — 20 个测试 (Agent 注册表)
+</div>
+<div class="collapsible-body" id="sec_registry">
+  <ul class="test-list">
+    <li><span>test_registry_initialization</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_agent_with_skills</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_heartbeat_renews_ttl</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_heartbeat_unknown_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_deregister_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_agent_exists</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_agent_not_found</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_agents</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_agents_empty</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_find_by_skill</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_find_by_skill_no_match</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_health_sweep</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_health_sweep_no_orphans</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_without_redis</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_connect_idempotent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_register_default_values</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_heartbeat_updates_last_heartbeat_value</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_deregister_nonexistent_agent</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_close_cleans_up</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- test_task_manager -->
+<div class="collapsible-header" onclick="toggleSection('sec_task')">
+  <span class="arrow" id="arrow_task">▶</span> <strong>test_task_manager</strong> — 9 个测试 (任务管理器)
+</div>
+<div class="collapsible-body" id="sec_task">
+  <ul class="test-list">
+    <li><span>test_create_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_get_nonexistent_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_update_status</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_complete_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_fail_task</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_list_tasks</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_event_subscription</span><span class="pass-icon">✓ PASSED</span></li>
+    <li><span>test_create_artifact_zip</span><span class="pass-icon">✓ PASSED</span></li>
+  </ul>
+</div>
+
+<!-- Conclusion -->
+<h2>📝 结论</h2>
+<div style="background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--green);border-radius:12px;padding:24px;margin-bottom:16px">
+  <p style="font-size:1em;color:var(--green);font-weight:700;margin-bottom:8px">🎉 External Agent Adapter 功能测试全部通过</p>
+  <p style="color:var(--text2);font-size:0.95em">
+    共执行 <strong style="color:var(--text)">156</strong> 个测试用例，全部通过，总耗时 <strong style="color:var(--text)">30.90s</strong>。
+    其中 <strong style="color:var(--accent)">27 个 E2E 测试</strong>覆盖了外部 Agent 从注册、心跳、查询、调用、注销、TTL 过期到重新注册的完整生命周期。
+    11 个测试模块验证了 A2A 协议通信、多协议适配器（OpenAI / CLI / MCP）、适配器管理器、熔断器、HTTP 网关、Agent 注册表、任务管理器、编排器、容器池、配置加载以及系统集成等核心功能。
+  </p>
+</div>
+
+<div class="footer">
+  <p>Agent Swarm · External Agent Adapter 测试报告 v0.2 · 生成时间 2026-06-13</p>
+  <p style="color:#484f58">运行环境：NVIDIA DGX Spark · Python 3.12.3 · pytest 9.0.3</p>
 </div>
 
 </div>
+
+<script>
+function toggleSection(id) {
+  const body = document.getElementById(id);
+  const arrow = document.getElementById('arrow_' + id.replace('sec_', ''));
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+</script>
 </body>
 </html>

@@ -45,11 +45,11 @@ def mock_registry():
 def mock_adapter_manager():
     mgr = MagicMock()
     mock_adapter = MagicMock()
-    mock_adapter.invoke = AsyncMock(return_value={
-        "success": True,
-        "result": "task completed",
-    })
-    mgr.get_adapter = AsyncMock(return_value=mock_adapter)
+    from src.adapters.base import AgentResult
+    mock_adapter.invoke = AsyncMock(return_value=AgentResult(
+        success=True, output="task completed",
+    ))
+    mgr.get = MagicMock(return_value=mock_adapter)
     return mgr
 
 
@@ -224,12 +224,12 @@ def test_invoke_agent_success(client, mock_registry, mock_adapter_manager):
     assert data["result"] == "task completed"
     assert data["error"] is None
 
-    mock_adapter_manager.get_adapter.assert_awaited_once_with("agent-001")
+    mock_adapter_manager.get.assert_called_once_with("agent-001")
 
 
 def test_invoke_agent_not_found(client, mock_adapter_manager):
     """POST /{agent_id}/invoke for unknown agent returns 404."""
-    mock_adapter_manager.get_adapter.side_effect = KeyError("agent-999")
+    mock_adapter_manager.get.return_value = None
     resp = client.post("/api/v1/agents/agent-999/invoke", json={
         "task": "do something",
     })
@@ -246,7 +246,7 @@ def test_invoke_agent_invoke_error(client, mock_adapter_manager):
     """POST /{agent_id}/invoke when adapter.invoke fails returns 500."""
     mock_adapter = MagicMock()
     mock_adapter.invoke = AsyncMock(side_effect=RuntimeError("adapter error"))
-    mock_adapter_manager.get_adapter = AsyncMock(return_value=mock_adapter)
+    mock_adapter_manager.get = MagicMock(return_value=mock_adapter)
 
     resp = client.post("/api/v1/agents/agent-001/invoke", json={
         "task": "fail task",

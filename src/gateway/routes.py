@@ -140,15 +140,17 @@ async def invoke_agent(agent_id: str, body: InvokeRequest):
     if _adapter_manager is None:
         raise HTTPException(status_code=503, detail="Adapter manager not available")
     try:
-        adapter = await _adapter_manager.get_adapter(agent_id)
+        adapter = _adapter_manager.get(agent_id)
+        if adapter is None:
+            raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
         result = await adapter.invoke(task=body.task, context=body.context)
         return AgentResult(
             agent_id=agent_id,
-            success=result.get("success", True),
-            result=result.get("result"),
-            error=result.get("error"),
+            success=result.success,
+            result=result.output,
+            error=result.error,
         )
-    except KeyError:
+    except (KeyError, HTTPException):
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     except Exception as e:
         logger.exception("Invoke failed")
