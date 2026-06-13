@@ -12,7 +12,7 @@ from src.container_pool.pool import ContainerPoolManager
 from src.orchestrator.orchestrator import Orchestrator
 from src.api.routes import router, set_deps
 from src.registry.registry import AgentRegistry
-from src.adapters.manager import AdapterManager
+from src.adapters.adapter_manager import AdapterManager
 from src.gateway import routes as gateway
 
 logging.basicConfig(
@@ -54,7 +54,7 @@ async def _lifespan(app: FastAPI):
         logger.warning(f"AgentRegistry Redis connect failed (running degraded): {e}")
     
     # 3. 初始化适配器管理器
-    adapter_manager = AdapterManager(registry=registry)
+    adapter_manager = AdapterManager()
     gateway.set_deps(registry, adapter_manager)
     logger.info("AdapterManager initialized")
     

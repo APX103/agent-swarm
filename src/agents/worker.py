@@ -442,10 +442,13 @@ def execute_file_tool(name: str, args: dict) -> str:
         return content[:5000]  # 限制返回长度
     
     elif name == "list_directory":
-        # list_directory 直接列出 role_dir（LLM 不需要指定子路径）
-        if not role_dir.exists():
-            return f"Directory not found"
-        files = [str(f.relative_to(role_dir)) for f in role_dir.rglob("*") if f.is_file()]
+        target_dir = role_dir
+        sub_path = args.get("path", "")
+        if sub_path:
+            target_dir = role_dir / sub_path
+        if not target_dir.exists():
+            return f"Directory not found: {sub_path}"
+        files = [str(f.relative_to(role_dir)) for f in target_dir.rglob("*") if f.is_file()]
         return "\n".join(files) if files else "(empty)"
     
     elif name == "run_command":

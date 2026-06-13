@@ -20,6 +20,7 @@ from openai import OpenAI
 
 from src.common.a2a_client import A2AClient, A2AMessage
 from src.container_pool.pool import ContainerPoolManager, PooledContainer
+from src.resilience.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,12 @@ class Orchestrator:
         self._current_task_id: Optional[str] = None
         self._current_tenant_id: Optional[str] = None
         self._shared_context: str = ""  # plan_task 生成的共享上下文
+        self._circuit_breaker = CircuitBreaker(
+            failure_threshold=3,
+            success_threshold=2,
+            timeout=60,
+            slow_call_threshold=120.0,
+        )
         
         # 工具定义
         self._tools = self._define_tools()
@@ -474,28 +481,36 @@ class Orchestrator:
 
         full_task = self._build_worker_task(task)
         
-        # 从池中 checkout 容器
-        container = await self.pool.checkout(
-            agent_card_id=agent_type,
-            task_id=self._current_task_id,
-            model=self.settings.llm.default_model,
-            base_url=self.settings.llm.default_base_url,
-            api_key=self.settings.llm.default_api_key,
-            tenant_id=self._current_tenant_id,
-        )
+        try:
+            container = await self._circuit_breaker.call(
+                self.pool.checkout,
+                agent_card_id=agent_type,
+                task_id=self._current_task_id,
+                model=self.settings.llm.default_model,
+                base_url=self.settings.llm.default_base_url,
+                api_key=self.settings.llm.default_api_key,
+                tenant_id=self._current_tenant_id,
+            )
+        except Exception as e:
+            return f"错误：{e}"
         
         if not container:
             return "错误：没有可用的 Worker 容器。请稍后重试或减少并行 Worker 数量。"
         
         dispatch_id = str(uuid.uuid4())[:8]
-        
-        # 创建 A2A 客户端（通过宿主机映射端口访问容器）
         a2a_url = f"http://localhost:{container.port}"
         a2a_client = A2AClient(a2a_url, timeout=300.0)
         
-        # 发送任务
-        message = A2AMessage(role="user", text=full_task)
-        a2a_task = await a2a_client.send_message(message, blocking=True)
+        async def _send():
+            return await a2a_client.send_message(
+                A2AMessage(role="user", text=full_task), blocking=True
+            )
+
+        try:
+            a2a_task = await self._circuit_breaker.call(_send)
+        except Exception as e:
+            await self.pool.return_container(container.container_id)
+            return f"错误：Worker 通信失败: {e}"
         
         dispatched = DispatchedAgent(
             container=container,
@@ -642,6 +657,31 @@ class Orchestrator:
         return f"产物文件列表（共 {len(files)} 个）：\n" + "\n".join(files)
     
     async def _tool_finalize(self, args: dict) -> str:
-        """finalize 工具实现"""
+        """finalize 工具实现 — 验证产出物后完成任务"""
         summary = args.get("summary", "")
-        return f"[FINALIZE] 任务已完成。摘要：\n{summary}"
+
+        artifact_warning = ""
+        if self.task_manager:
+            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            if artifacts_dir and artifacts_dir.exists():
+                real_files = [
+                    f for f in artifacts_dir.rglob("*")
+                    if f.is_file() and not f.parent.name.startswith("_plan")
+                ]
+                if not real_files:
+                    artifact_warning = (
+                        "\n\n⚠️ 警告：工作目录中没有产出文件。"
+                        "请确认 Worker 是否已正确执行任务。"
+                    )
+                else:
+                    file_list = "\n".join(
+                        f"  - {f.relative_to(artifacts_dir)}" for f in real_files
+                    )
+                    artifact_warning = f"\n\n已验证产出物（{len(real_files)} 个文件）：\n{file_list}"
+            elif self._dispatched:
+                artifact_warning = (
+                    "\n\n⚠️ 警告：已分派 Agent 但找不到工作目录。"
+                    "产出物可能未正确保存。"
+                )
+
+        return f"[FINALIZE] 任务已完成。摘要：\n{summary}{artifact_warning}"
