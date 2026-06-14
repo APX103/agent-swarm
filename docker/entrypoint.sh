@@ -30,6 +30,7 @@ if [ -s "$CONFIG_FILE" ]; then
     export TASK_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['task_id'])")
     export ORCHESTRATOR_URL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE', errors='ignore')).get('orchestrator_url', ''))" 2>/dev/null || echo "")
     export SHARED_DIR=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('shared_dir', '/workspace/artifacts'))")
+    export AGENT_SYSTEM_PROMPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('system_prompt', ''))" 2>/dev/null || echo "")
 fi
 
 echo "[Worker] Starting Agent: role=$AGENT_ROLE, model=$LLM_MODEL, port=$AGENT_PORT"

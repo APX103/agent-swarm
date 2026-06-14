@@ -221,6 +221,15 @@ class ContainerPoolManager:
             "shared_dir": container_shared_dir,
             "orchestrator_url": orchestrator_url,
         }
+
+        # 注入角色 system_prompt（来自 settings.agent_cards）：支持纯 config 定义的新角色
+        if self.settings:
+            for _card in getattr(self.settings, "agent_cards", []):
+                if getattr(_card, "id", None) == agent_card_id:
+                    _sp = getattr(_card, "system_prompt", "")
+                    if _sp:
+                        config["system_prompt"] = _sp
+                    break
         
         config_path = Path(idle.config_file)
         config_path.parent.mkdir(parents=True, exist_ok=True)

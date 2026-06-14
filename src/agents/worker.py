@@ -199,8 +199,32 @@ app = FastAPI(title=f"Worker Agent ({AGENT_ROLE})")
 _tasks: dict[str, dict] = {}
 
 
+def resolve_card(role: str) -> dict:
+    """Agent card for *role*: prefer an env-injected card (WORKER_ROLE_CARD JSON,
+    e.g. provided by the pool from config), else built-in, else general-agent.
+
+    This lets a config-defined role reach the worker without editing worker.py.
+    """
+    injected = os.environ.get("WORKER_ROLE_CARD")
+    if injected:
+        try:
+            return json.loads(injected)
+        except Exception:
+            logger.warning("Bad WORKER_ROLE_CARD JSON; falling back to built-in")
+    return AGENT_CARDS.get(role, AGENT_CARDS["general-agent"])
+
+
+def resolve_prompt(role: str) -> str:
+    """System prompt for *role*: prefer env AGENT_SYSTEM_PROMPT (pool-injected),
+    else built-in, else general-agent."""
+    injected = os.environ.get("AGENT_SYSTEM_PROMPT")
+    if injected:
+        return injected
+    return SYSTEM_PROMPTS.get(role, SYSTEM_PROMPTS["general-agent"])
+
+
 def get_agent_card() -> dict:
-    card = AGENT_CARDS.get(AGENT_ROLE, AGENT_CARDS["general-agent"]).copy()
+    card = resolve_card(AGENT_ROLE).copy()
     card["url"] = f"http://localhost:{AGENT_PORT}"
     return card
 
@@ -325,7 +349,7 @@ async def call_llm(user_message: str, on_progress=None) -> str:
     """调用 LLM 处理任务（委托给可测的 run_agent_loop）。"""
     from openai import OpenAI
 
-    system_prompt = SYSTEM_PROMPTS.get(AGENT_ROLE, SYSTEM_PROMPTS["general-agent"])
+    system_prompt = resolve_prompt(AGENT_ROLE)
 
     # 构建文件系统工具
     tools = [
@@ -382,6 +406,33 @@ async def call_llm(user_message: str, on_progress=None) -> str:
                         "command": {"type": "string", "description": "shell 命令"},
                     },
                     "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_shared_file",
+                "description": "只读读取共享任务目录中的文件（含其他 Agent 的产出，如 backend/api.py 或 _plan/project_plan.md）。路径相对任务根目录。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "相对任务根的文件路径"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_shared",
+                "description": "只读列出共享任务目录中的所有文件（含其他 Agent 的产出）。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "子目录（可选）"},
+                    },
                 },
             },
         },
@@ -458,7 +509,24 @@ def execute_file_tool(name: str, args: dict) -> str:
             return output[:5000] if output else "(no output)"
         except Exception as e:
             return f"Command error: {e}"
-    
+
+    elif name == "read_shared_file":
+        # 只读：读取共享任务目录（含其他 Agent 产出），路径相对任务根。
+        path = Path(shared_dir) / args["path"]
+        if not path.exists():
+            return f"File not found: {args['path']}"
+        return path.read_text(encoding="utf-8", errors="replace")[:5000]
+
+    elif name == "list_shared":
+        target_dir = Path(shared_dir)
+        sub_path = args.get("path", "")
+        if sub_path:
+            target_dir = target_dir / sub_path
+        if not target_dir.exists():
+            return f"Directory not found: {sub_path}"
+        files = [str(f.relative_to(shared_dir)) for f in target_dir.rglob("*") if f.is_file()]
+        return "\n".join(files) if files else "(empty)"
+
     return f"Unknown tool: {name}"
 
 

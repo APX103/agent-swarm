@@ -55,6 +55,7 @@ class AgentCardDef:
     name: str
     description: str
     skills: list = field(default_factory=list)
+    system_prompt: str = ""  # optional; lets new roles be defined purely in config
 
 
 @dataclass
@@ -123,6 +124,7 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
                 name=card["name"],
                 description=card["description"],
                 skills=card.get("skills", []),
+                system_prompt=card.get("system_prompt", ""),
             ))
 
     if "orchestrator" in data:
