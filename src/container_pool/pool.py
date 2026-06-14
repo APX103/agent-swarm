@@ -53,6 +53,8 @@ class ContainerPoolManager:
         self.base_port = settings.container_pool.base_port if settings else 9001
         self.mem_limit = settings.container_pool.mem_limit if settings else "512m"
         self.cpu_limit = settings.container_pool.cpu_limit if settings else 0.5
+        self.worker_host = settings.container_pool.worker_host if settings else "localhost"
+
         self.shared_output_base = settings.storage.shared_output_base if settings else "/home/apx103/work/swarm/shared_output"
         
         self._pool: dict[str, PooledContainer] = {}  # container_id -> PooledContainer
@@ -78,10 +80,15 @@ class ContainerPoolManager:
     async def startup(self):
         """启动容器池：创建网络、拉取镜像、预启动容器"""
         logger.info(f"Starting container pool: size={self.pool_size}, image={self.image_name}")
-        
-        # 准备配置目录（放在项目根目录下，避免暴露到容器共享目录）
-        project_root = Path(__file__).parent.parent.parent
-        self._config_dir = project_root / ".pool_configs"
+
+        # 准备配置目录：容器化时必须是 host 可见路径（pool 把它 bind-mount 进 worker，
+        # 而 worker 由 host daemon 创建）；否则用项目根目录下的 .pool_configs。
+        configured = getattr(self.settings.container_pool, "pool_config_dir", "") if self.settings else ""
+        if configured:
+            self._config_dir = Path(configured)
+        else:
+            project_root = Path(__file__).parent.parent.parent
+            self._config_dir = project_root / ".pool_configs"
         self._config_dir.mkdir(parents=True, exist_ok=True)
         
         # 创建 Docker 网络
@@ -227,7 +234,7 @@ class ContainerPoolManager:
         for _ in range(max_wait // 2):
             try:
                 async with httpx.AsyncClient(timeout=3.0) as hc:
-                    resp = await hc.get(f"http://localhost:{idle.port}/.well-known/agent.json")
+                    resp = await hc.get(f"http://{self.worker_host}:{idle.port}/.well-known/agent.json")
                     if resp.status_code == 200:
                         logger.info(f"Worker {idle.container_name} ready on port {idle.port}")
                         break

@@ -34,3 +34,27 @@ def test_validate_zero_pool_size():
     s.container_pool.pool_size = 0
     warns = validate_settings(s)
     assert any("pool_size" in w for w in warns)
+
+
+def test_env_overrides_apply_when_nonempty(monkeypatch):
+    """A3: non-empty env vars override yaml config (needed for container deploy)."""
+    from src.config import load_settings
+
+    monkeypatch.setenv("LLM_DEFAULT_MODEL", "env-model")
+    monkeypatch.setenv("SHARED_OUTPUT_BASE", "/env/path")
+    monkeypatch.setenv("CONTAINER_WORKER_HOST", "host.docker.internal")
+    monkeypatch.setenv("CONTAINER_POOL_SIZE", "7")
+    s = load_settings()
+    assert s.llm.default_model == "env-model"
+    assert s.storage.shared_output_base == "/env/path"
+    assert s.container_pool.worker_host == "host.docker.internal"
+    assert s.container_pool.pool_size == 7
+
+
+def test_env_empty_does_not_override_yaml(monkeypatch):
+    """A3: empty env must not clobber the yaml value."""
+    from src.config import load_settings
+
+    monkeypatch.setenv("LLM_DEFAULT_MODEL", "")
+    s = load_settings()
+    assert s.llm.default_model == "glm-4.7"

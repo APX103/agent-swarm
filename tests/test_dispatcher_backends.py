@@ -157,3 +157,37 @@ async def test_external_invoke_adapter_failure():
     )
     assert attempt.success is False
     assert "boom" in (attempt.error or "")
+
+
+@pytest.mark.asyncio
+async def test_docker_backend_uses_configured_worker_host(monkeypatch):
+    """A2: worker_host flows into the A2A client URL (so a container orchestrator
+    can reach host-published worker ports via host.docker.internal)."""
+    pool = MagicMock()
+    pool.checkout = AsyncMock(return_value=_container())
+    pool.return_container = AsyncMock()
+    captured: dict = {}
+
+    class RecClient:
+        def __init__(self, base_url, timeout=30.0):
+            captured["url"] = base_url
+
+        async def send_message(self, msg, blocking=True):
+            return MagicMock(state="completed", message="ok", task_id="t1")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("src.dispatcher.backends.A2AClient", RecClient)
+    backend = DockerBackend(
+        pool=pool, model="m", base_url="u", api_key="k", worker_host="host.docker.internal"
+    )
+    await backend.invoke(
+        DispatchTarget(kind="docker", agent_type="x"), DispatchRequest(agent_type="x", task="t")
+    )
+    assert "host.docker.internal" in captured["url"]
+
+
+def test_docker_backend_default_worker_host_is_localhost():
+    backend = DockerBackend(pool=MagicMock(), model="m", base_url="u", api_key="k")
+    assert backend._worker_host == "localhost"

@@ -33,6 +33,8 @@ class ContainerPoolConfig:
     base_port: int = 9001
     mem_limit: str = "512m"
     cpu_limit: float = 0.5
+    worker_host: str = "localhost"  # host where worker ports are published (host.docker.internal when orchestrator runs in a container)
+    pool_config_dir: str = ""  # host-visible dir for per-container config.json (container mode must set this to a host path)
 
 
 @dataclass
@@ -137,6 +139,34 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
         settings.orchestrator.provider = os.environ["ORCHESTRATOR_PROVIDER"]
     if os.environ.get("ORCHESTRATOR_EXTERNAL_ENDPOINT"):
         settings.orchestrator.external_endpoint = os.environ["ORCHESTRATOR_EXTERNAL_ENDPOINT"]
+
+    # Environment overrides (non-empty only) for deployment knobs (compose/container).
+    if os.environ.get("LLM_DEFAULT_MODEL"):
+        settings.llm.default_model = os.environ["LLM_DEFAULT_MODEL"]
+    if os.environ.get("LLM_DEFAULT_BASE_URL"):
+        settings.llm.default_base_url = os.environ["LLM_DEFAULT_BASE_URL"]
+    if os.environ.get("LLM_DEFAULT_API_KEY"):
+        settings.llm.default_api_key = os.environ["LLM_DEFAULT_API_KEY"]
+    if os.environ.get("SHARED_OUTPUT_BASE"):
+        settings.storage.shared_output_base = os.environ["SHARED_OUTPUT_BASE"]
+    if os.environ.get("CONTAINER_POOL_SIZE"):
+        try:
+            settings.container_pool.pool_size = int(os.environ["CONTAINER_POOL_SIZE"])
+        except ValueError:
+            pass
+    if os.environ.get("CONTAINER_BASE_PORT"):
+        try:
+            settings.container_pool.base_port = int(os.environ["CONTAINER_BASE_PORT"])
+        except ValueError:
+            pass
+    if os.environ.get("CONTAINER_IMAGE_NAME"):
+        settings.container_pool.image_name = os.environ["CONTAINER_IMAGE_NAME"]
+    if os.environ.get("CONTAINER_WORKER_HOST"):
+        settings.container_pool.worker_host = os.environ["CONTAINER_WORKER_HOST"]
+    if os.environ.get("POOL_CONFIG_DIR"):
+        settings.container_pool.pool_config_dir = os.environ["POOL_CONFIG_DIR"]
+    if os.environ.get("REDIS_URL"):
+        settings.redis.redis_url = os.environ["REDIS_URL"]
 
     return settings
 

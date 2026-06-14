@@ -30,11 +30,12 @@ class DispatchBackend(Protocol):
 class DockerBackend:
     """Dispatch to Docker-backed workers via the container pool + A2A."""
 
-    def __init__(self, pool, model: str, base_url: str, api_key: str) -> None:
+    def __init__(self, pool, model: str, base_url: str, api_key: str, worker_host: str = "localhost") -> None:
         self.pool = pool
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        self._worker_host = worker_host
 
     async def candidates(self, agent_type: str) -> list[DispatchTarget]:
         # The pool manages multiple containers internally; expose one logical target.
@@ -56,7 +57,7 @@ class DockerBackend:
                 target=target, success=False, error="No idle worker container available"
             )
 
-        client = A2AClient(f"http://localhost:{container.port}", timeout=300.0)
+        client = A2AClient(f"http://{self._worker_host}:{container.port}", timeout=300.0)
         a2a_task = None
         send_error: Optional[str] = None
         try:
