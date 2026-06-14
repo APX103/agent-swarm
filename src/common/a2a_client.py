@@ -1,8 +1,10 @@
 """A2A 协议客户端封装 - 用于 Orchestrator 与 Worker Agent 通信"""
+import asyncio
 import json
-import uuid
 import logging
-from typing import Optional
+import time
+import uuid
+from typing import AsyncIterator, Optional
 from dataclasses import dataclass, field
 
 import httpx
@@ -143,6 +145,33 @@ class A2AClient:
             logger.error(f"Failed to get task: {e}")
             return None
     
+    async def poll_task(
+        self,
+        task_id: str,
+        interval: float = 2.0,
+        timeout: float = 300.0,
+    ) -> AsyncIterator[A2ATask]:
+        """Poll ``tasks/get`` and yield task snapshots as they change.
+
+        Yields when the task's state or message changes. Stops at a terminal
+        state (completed/failed/canceled) or when *timeout* elapses.
+        """
+        deadline = time.monotonic() + timeout
+        last_key: Optional[tuple] = None
+        terminal = ("completed", "failed", "canceled")
+        while True:
+            if time.monotonic() >= deadline:
+                return
+            task = await self.get_task(task_id)
+            if task is not None:
+                key = (task.state, task.message)
+                if key != last_key:
+                    last_key = key
+                    yield task
+                if task.state in terminal:
+                    return
+            await asyncio.sleep(interval)
+
     async def close(self):
         await self._client.aclose()
     
