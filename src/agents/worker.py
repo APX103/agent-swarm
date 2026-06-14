@@ -199,8 +199,32 @@ app = FastAPI(title=f"Worker Agent ({AGENT_ROLE})")
 _tasks: dict[str, dict] = {}
 
 
+def resolve_card(role: str) -> dict:
+    """Agent card for *role*: prefer an env-injected card (WORKER_ROLE_CARD JSON,
+    e.g. provided by the pool from config), else built-in, else general-agent.
+
+    This lets a config-defined role reach the worker without editing worker.py.
+    """
+    injected = os.environ.get("WORKER_ROLE_CARD")
+    if injected:
+        try:
+            return json.loads(injected)
+        except Exception:
+            logger.warning("Bad WORKER_ROLE_CARD JSON; falling back to built-in")
+    return AGENT_CARDS.get(role, AGENT_CARDS["general-agent"])
+
+
+def resolve_prompt(role: str) -> str:
+    """System prompt for *role*: prefer env AGENT_SYSTEM_PROMPT (pool-injected),
+    else built-in, else general-agent."""
+    injected = os.environ.get("AGENT_SYSTEM_PROMPT")
+    if injected:
+        return injected
+    return SYSTEM_PROMPTS.get(role, SYSTEM_PROMPTS["general-agent"])
+
+
 def get_agent_card() -> dict:
-    card = AGENT_CARDS.get(AGENT_ROLE, AGENT_CARDS["general-agent"]).copy()
+    card = resolve_card(AGENT_ROLE).copy()
     card["url"] = f"http://localhost:{AGENT_PORT}"
     return card
 
@@ -325,7 +349,7 @@ async def call_llm(user_message: str, on_progress=None) -> str:
     """调用 LLM 处理任务（委托给可测的 run_agent_loop）。"""
     from openai import OpenAI
 
-    system_prompt = SYSTEM_PROMPTS.get(AGENT_ROLE, SYSTEM_PROMPTS["general-agent"])
+    system_prompt = resolve_prompt(AGENT_ROLE)
 
     # 构建文件系统工具
     tools = [
