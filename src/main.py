@@ -16,6 +16,7 @@ from src.adapters.adapter_manager import AdapterManager
 from src.gateway import routes as gateway
 from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
 from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
+from src.dispatcher.result_cache import ResultCache
 from src.orchestrator.resolver import OrchestratorResolver
 from src.observability.trace import TraceIdFilter
 from src.registry.sweeper import health_sweep_loop
@@ -92,6 +93,7 @@ async def _lifespan(app: FastAPI):
             ExternalAgentBackend(registry=registry, adapter_manager=adapter_manager),
         ],
         DispatcherConfig(),
+        result_cache=ResultCache(),
     )
 
     # 6. 初始化编排器（注入 Dispatcher）

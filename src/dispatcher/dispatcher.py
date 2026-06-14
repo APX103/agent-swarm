@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from src.dispatcher.base import DispatchAttempt, DispatchRequest, DispatchResult, DispatchTarget
+from src.dispatcher.result_cache import ResultCache
 from src.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,11 @@ class Dispatcher:
         self,
         backends: list[_Backend],
         config: Optional[DispatcherConfig] = None,
+        result_cache: Optional[ResultCache] = None,
     ) -> None:
         self._backends = backends
         self._config = config or DispatcherConfig()
+        self._result_cache = result_cache
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
         # per-target circuit breakers, keyed by (kind, agent_id|agent_type)
         self._breakers: dict[tuple[str, str], CircuitBreaker] = {}
@@ -90,6 +93,9 @@ class Dispatcher:
             pairs = await self._filter_healthy(pairs)
 
         if not pairs:
+            cached = self._cached(request)
+            if cached is not None:
+                return cached
             return DispatchResult(
                 success=False,
                 error=f"No candidates for agent_type '{request.agent_type}'",
@@ -101,12 +107,28 @@ class Dispatcher:
             attempt = await self._try_one(target, backend, request)
             attempts.append(attempt)
             if attempt.success:
-                return DispatchResult(
+                result = DispatchResult(
                     success=True,
                     output=attempt.output,
                     target=target,
                     attempts=attempts,
                 )
+                if self._result_cache is not None:
+                    self._result_cache.put(request.agent_type, request.task, result)
+                return result
+
+        # all candidates failed — try graceful degradation via the result cache
+        cached = self._cached(request)
+        if cached is not None:
+            logger.info("Serving cached result for %s (degraded)", request.agent_type)
+            return DispatchResult(
+                success=True,
+                degraded=True,
+                output=cached.output,
+                artifacts=cached.artifacts,
+                target=cached.target,
+                attempts=attempts,
+            )
 
         last = attempts[-1]
         return DispatchResult(
@@ -114,6 +136,21 @@ class Dispatcher:
             output=last.output,
             error=last.error or "All candidates failed",
             attempts=attempts,
+        )
+
+    def _cached(self, request: DispatchRequest) -> Optional[DispatchResult]:
+        """Return a degraded-result wrapper if the cache has a hit, else None."""
+        if self._result_cache is None:
+            return None
+        cached = self._result_cache.get(request.agent_type, request.task)
+        if cached is None:
+            return None
+        return DispatchResult(
+            success=True,
+            degraded=True,
+            output=cached.output,
+            artifacts=cached.artifacts,
+            target=cached.target,
         )
 
     # ── single-candidate attempt (R2.6 timeout + backpressure, R2.7 breaker) ──

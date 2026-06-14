@@ -63,6 +63,7 @@ class DispatchResult:
     error: Optional[str] = None
     target: Optional[DispatchTarget] = None
     attempts: list[DispatchAttempt] = field(default_factory=list)
+    degraded: bool = False  # True when served from the result cache (L2 fallback)
 
     @classmethod
     def from_attempt(cls, attempt: DispatchAttempt, artifacts: Optional[list[str]] = None) -> "DispatchResult":
