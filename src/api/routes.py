@@ -53,6 +53,25 @@ def _get_tenant_semaphore(
     return sem
 
 
+# Live orchestration tasks, for real cancellation (not just a status flip).
+_running_orchestrations: dict[str, asyncio.Task] = {}
+
+
+def register_running(task_id: str, orch_task: asyncio.Task) -> None:
+    """Track a running orchestration task so it can be cancelled later."""
+    _running_orchestrations[task_id] = orch_task
+    orch_task.add_done_callback(lambda _t, tid=task_id: _running_orchestrations.pop(tid, None))
+
+
+def cancel_running(task_id: str) -> bool:
+    """Cancel a running orchestration task. Returns False if none / already done."""
+    orch_task = _running_orchestrations.get(task_id)
+    if orch_task is None or orch_task.done():
+        return False
+    orch_task.cancel()
+    return True
+
+
 @router.post("/api/chat", response_model=TaskResponse)
 async def chat(req: ChatRequest):
     """接收用户消息，创建并执行任务"""
@@ -92,7 +111,8 @@ async def chat(req: ChatRequest):
                 logger.error(f"Orchestration failed: {e}", exc_info=True)
                 await task_manager.fail_task(task.task_id, str(e))
     
-    asyncio.create_task(run_orchestration())
+    orch_task = asyncio.create_task(run_orchestration())
+    register_running(task.task_id, orch_task)
     
     return TaskResponse(
         task_id=task.task_id,
@@ -211,6 +231,7 @@ async def task_websocket(websocket: WebSocket, task_id: str):
         while True:
             data = await websocket.receive_json()
             if data.get("action") == "cancel":
+                cancel_running(task_id)
                 await task_manager.update_status(task_id, TaskStatus.CANCELLED)
                 break
     except WebSocketDisconnect:
