@@ -20,3 +20,4 @@
 
 ## 变更记录
 - 2026-06-14：目标创建。开始 W12。
+- 2026-06-14：**W12 + W13 + W14 全部完成（TDD，自主执行）。** 249 passed。commits `ac895f2`（W12）/ `4a4c411`（W13）/ `3183075`（W14）。目标达成：worker 真非阻塞 + 步骤进度写入 task 记录 + A2A poll_task 轮询 + DockerBackend 流式 + 编排器转发 `agent_progress` 到 WebSocket。

@@ -68,4 +68,5 @@
 - 2026-06-14：**Round 3 全部完成（R3.1–R3.5 + R3.V）。三轮迭代全部完成。207 passed（156→207，+51，只增不删）。** 可插拔编排器落地：OrchestratorBackend 协议 + OrchestratorResolver（config 指定 + 自动回退，事件显式标注）+ ExternalOrchestrator（A2A）+ /api/chat 路由 + config.orchestrator（默认 builtin，零行为变更）。goal 1/2/3 全部达成。提交 `def8bc4`。
 - 2026-06-14：**Wave 4（可观测性）** 214 passed，提交 `c2db32b`。**Wave 5（周期 health_sweep）** 217 passed，提交 `08373aa`。系列继续推进 backlog。
 - 2026-06-14：**Wave 6（启动自检）** 221 passed `6148624`；**Wave 7（per-tenant 背压）** 224 `8659711`；**Wave 8（真实取消）** 228 `309e566`。
-- 2026-06-14：**可靠投递目标完成（W9 幂等性 `c395d5b` + W10 死信 `c10fb12` + W11 优雅降级缓存 `bdcfca9`）。** 242 passed（156→242，+86，只增不删）。剩余 backlog：流式进度（需改 worker）。
+- 2026-06-14：**可靠投递目标完成（W9 幂等性 `c395d5b` + W10 死信 `c10fb12` + W11 优雅降级缓存 `bdcfca9`）。** 242 passed（156→242，+86，只增不删）。已合并入 main（`9c3b842`）。
+- 2026-06-14：**流式进度目标完成（W12 A2A poll_task `ac895f2` + W13 worker 真非阻塞+进度 `4a4c411` + W14 编排器转发 `agent_progress` `3183075`）。** 249 passed（156→249，+93）。分支 `feat/streaming-progress`，待合并。
