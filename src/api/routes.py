@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, Header
 from fastapi.responses import FileResponse
 
 from src.api.models import (
@@ -27,6 +27,9 @@ orchestrator: Optional[Orchestrator] = None
 task_manager: Optional[TaskManager] = None
 pool_manager: Optional[ContainerPoolManager] = None
 orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
+
+# Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
+_idempotency_index: dict[str, str] = {}
 
 
 def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None):
@@ -73,13 +76,30 @@ def cancel_running(task_id: str) -> bool:
 
 
 @router.post("/api/chat", response_model=TaskResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     """接收用户消息，创建并执行任务"""
+    # 幂等：同一 Idempotency-Key 复用已有 task，不重复编排
+    if idempotency_key:
+        existing_id = _idempotency_index.get(idempotency_key)
+        if existing_id is not None and task_manager is not None:
+            existing = task_manager.get_task(existing_id)
+            if existing is not None:
+                logger.info("idempotent replay key=%s -> task=%s", idempotency_key, existing_id)
+                return TaskResponse(
+                    task_id=existing.task_id,
+                    status=existing.status,
+                    message=existing.result,
+                    artifacts=existing.artifacts,
+                )
+
     # 创建任务
     task = await task_manager.create_task(
         user_message=req.message,
         tenant_id=req.tenant_id or "default",
     )
+
+    if idempotency_key:
+        _idempotency_index[idempotency_key] = task.task_id
     
     # 订阅事件到 WebSocket 广播
     async def on_event(event: dict):
