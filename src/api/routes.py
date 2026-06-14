@@ -17,6 +17,7 @@ from src.task_manager.manager import TaskManager
 from src.orchestrator.orchestrator import Orchestrator
 from src.container_pool.pool import ContainerPoolManager
 from src.observability.trace import set_trace_id
+from src.reliability.dead_letter import DeadLetterRecord, DeadLetterStore
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
 
 # Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
 _idempotency_index: dict[str, str] = {}
+
+# Dead-letter store for failed orchestrations.
+dead_letters = DeadLetterStore()
 
 
 def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None):
@@ -129,6 +133,12 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
                 await task_manager.complete_task(task.task_id, result)
             except Exception as e:
                 logger.error(f"Orchestration failed: {e}", exc_info=True)
+                dead_letters.record(DeadLetterRecord(
+                    task_id=task.task_id,
+                    tenant_id=task.tenant_id,
+                    error=str(e),
+                    user_message=req.message,
+                ))
                 await task_manager.fail_task(task.task_id, str(e))
     
     orch_task = asyncio.create_task(run_orchestration())
@@ -231,6 +241,21 @@ async def health():
         active_tasks=sum(1 for t in (task_manager.list_tasks() if task_manager else []) 
                         if t.status == TaskStatus.RUNNING),
     )
+
+
+@router.get("/api/v1/dead-letters")
+async def list_dead_letters(limit: int = Query(50)):
+    """List recent dead-letter records (failed orchestrations)."""
+    return [
+        {
+            "task_id": r.task_id,
+            "tenant_id": r.tenant_id,
+            "error": r.error,
+            "user_message": r.user_message,
+            "timestamp": r.timestamp,
+        }
+        for r in dead_letters.recent(limit)
+    ]
 
 
 @router.websocket("/ws/tasks/{task_id}")
