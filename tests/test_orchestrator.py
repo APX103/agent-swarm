@@ -199,3 +199,34 @@ async def test_tool_read_artifacts_not_found(mock_settings, mock_pool, mock_task
     
     result = await orch._tool_read_artifacts({"file_path": "nonexistent.txt"})
     assert "不存在" in result or "未找到" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_uses_injected_dispatcher(mock_settings, mock_pool, mock_task_mgr):
+    """R2.8: an injected Dispatcher is used (e.g. an external agent becomes a candidate)."""
+    from src.orchestrator.orchestrator import Orchestrator
+    from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
+    from src.dispatcher.base import DispatchAttempt, DispatchTarget
+
+    class FakeExternalBackend:
+        async def candidates(self, agent_type):
+            return [DispatchTarget(kind="external", agent_type=agent_type, agent_id="ext1")]
+
+        async def invoke(self, target, request):
+            return DispatchAttempt(target=target, success=True, output="EXTERNAL-OK")
+
+        async def health_check(self, target):
+            return True
+
+    dispatcher = Dispatcher([FakeExternalBackend()], DispatcherConfig(health_precheck=False))
+    orch = Orchestrator(
+        settings=mock_settings,
+        pool_manager=mock_pool,
+        task_manager=mock_task_mgr,
+        dispatcher=dispatcher,
+    )
+    orch._current_task_id = "t1"
+
+    result = await orch._tool_dispatch_agent({"agent_type": "frontend-ux-pro", "task": "x"})
+    assert "EXTERNAL-OK" in result
+    assert "completed" in result

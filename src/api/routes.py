@@ -25,13 +25,15 @@ router = APIRouter()
 orchestrator: Optional[Orchestrator] = None
 task_manager: Optional[TaskManager] = None
 pool_manager: Optional[ContainerPoolManager] = None
+orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager):
-    global orchestrator, task_manager, pool_manager
+def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None):
+    global orchestrator, task_manager, pool_manager, orchestrator_resolver
     orchestrator = orch
     task_manager = tm
     pool_manager = pool
+    orchestrator_resolver = resolver
 
 
 @router.post("/api/chat", response_model=TaskResponse)
@@ -55,7 +57,9 @@ async def chat(req: ChatRequest):
     # 在后台执行编排
     async def run_orchestration():
         try:
-            result = await orchestrator.execute(
+            # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
+            backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator
+            result = await backend.execute(
                 task_id=task.task_id,
                 tenant_id=task.tenant_id,
                 user_message=req.message,

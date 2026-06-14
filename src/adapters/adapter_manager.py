@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 from .base import AgentBackend
+from .a2a_adapter import A2AAdapter
 from .cli_adapter import CLIAdapter
 from .mcp_adapter import MCPAdapter
 from .openai_adapter import OpenAIAdapter
@@ -13,8 +14,7 @@ PROTOCOL_REGISTRY: dict[str, type[AgentBackend]] = {
     "openai": OpenAIAdapter,
     "cli": CLIAdapter,
     "mcp": MCPAdapter,
-    # A2A reuses the OpenAI adapter for now
-    "a2a": OpenAIAdapter,
+    "a2a": A2AAdapter,
 }
 
 

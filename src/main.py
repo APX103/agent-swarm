@@ -14,6 +14,9 @@ from src.api.routes import router, set_deps
 from src.registry.registry import AgentRegistry
 from src.adapters.adapter_manager import AdapterManager
 from src.gateway import routes as gateway
+from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
+from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
+from src.orchestrator.resolver import OrchestratorResolver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,16 +70,32 @@ async def _lifespan(app: FastAPI):
         logger.error(f"ContainerPool startup failed (running in mock mode): {e}")
         logger.warning("Will operate without real Docker containers")
     
-    # 5. 初始化编排器
+    # 5. 初始化统一 Dispatcher（Docker 容器 + 外部注册 Agent 同为候选）
+    dispatcher = Dispatcher(
+        [
+            DockerBackend(
+                pool=pool_manager,
+                model=settings.llm.default_model,
+                base_url=settings.llm.default_base_url,
+                api_key=settings.llm.default_api_key or "no-key-configured",
+            ),
+            ExternalAgentBackend(registry=registry, adapter_manager=adapter_manager),
+        ],
+        DispatcherConfig(),
+    )
+
+    # 6. 初始化编排器（注入 Dispatcher）
     orchestrator = Orchestrator(
         settings=settings,
         pool_manager=pool_manager,
         task_manager=task_manager,
+        dispatcher=dispatcher,
     )
-    logger.info("Orchestrator initialized")
-    
-    # 6. 注入依赖
-    set_deps(orchestrator, task_manager, pool_manager)
+    logger.info("Orchestrator initialized (unified dispatcher wired)")
+
+    # 7. 组装可插拔编排器解析器并注入依赖
+    resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
+    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver)
     
     logger.info("🐝 Agent Swarm ready!")
     

@@ -14,13 +14,13 @@ import json
 import logging
 import uuid
 from typing import Optional
-from dataclasses import dataclass
 
 from openai import OpenAI
 
-from src.common.a2a_client import A2AClient, A2AMessage
-from src.container_pool.pool import ContainerPoolManager, PooledContainer
-from src.resilience.circuit_breaker import CircuitBreaker
+from src.container_pool.pool import ContainerPoolManager
+from src.dispatcher.backends import DockerBackend
+from src.dispatcher.base import DispatchRequest, DispatchResult
+from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
 
 logger = logging.getLogger(__name__)
 
@@ -72,47 +72,43 @@ Worker 完成后：
 """
 
 
-@dataclass
-class DispatchedAgent:
-    """已分派的 Agent"""
-    container: PooledContainer
-    agent_card_id: str
-    a2a_task_id: Optional[str] = None
-    a2a_client: Optional[A2AClient] = None
-
-
 class Orchestrator:
     """编排器 Agent"""
     
-    def __init__(self, settings, pool_manager: ContainerPoolManager, task_manager=None):
+    def __init__(self, settings, pool_manager: ContainerPoolManager, task_manager=None,
+                 dispatcher: Optional[Dispatcher] = None):
         self.settings = settings
         self.pool = pool_manager
         self.task_manager = task_manager
-        
+
         # LLM Client (OpenAI-compatible for GLM)
         api_key = settings.llm.default_api_key or "no-key-configured"
         base_url = settings.llm.default_base_url
         model = settings.llm.default_model
-        
+
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
         )
         self.model = model
-        
+
+        # Unified dispatcher (Docker + external). If none is injected, build a
+        # Docker-only one so behaviour matches the pre-refactor orchestrator.
+        if dispatcher is None:
+            dispatcher = Dispatcher(
+                [DockerBackend(pool=pool_manager, model=model, base_url=base_url, api_key=api_key)],
+                DispatcherConfig(),
+            )
+        self._dispatcher = dispatcher
+
         # 当前任务的上下文
         self._messages: list[dict] = []
-        self._dispatched: dict[str, DispatchedAgent] = {}  # task_id -> DispatchedAgent
+        # dispatch_id -> (agent_type, DispatchResult)
+        self._dispatched: dict[str, tuple[str, DispatchResult]] = {}
         self._current_task_id: Optional[str] = None
         self._current_tenant_id: Optional[str] = None
         self._shared_context: str = ""  # plan_task 生成的共享上下文
-        self._circuit_breaker = CircuitBreaker(
-            failure_threshold=3,
-            success_threshold=2,
-            timeout=60,
-            slow_call_threshold=120.0,
-        )
-        
+
         # 工具定义
         self._tools = self._define_tools()
     
@@ -403,16 +399,9 @@ class Orchestrator:
             if any(tc.function.name == "finalize" for tc in msg.tool_calls):
                 break
         
-        # 清理：归还所有容器
-        for dispatch_id, dispatched in self._dispatched.items():
-            try:
-                await self.pool.return_container(dispatched.container.container_id)
-                if dispatched.a2a_client:
-                    await dispatched.a2a_client.close()
-            except Exception as e:
-                logger.error(f"Error returning container: {e}")
+        # 清理：容器归还已由 Dispatcher 在每次 dispatch 的 finally 内完成，这里仅清理分派记录
         self._dispatched.clear()
-        
+
         return final_result
     
     async def _execute_tool(self, name: str, args: dict) -> str:
@@ -475,58 +464,26 @@ class Orchestrator:
         )
 
     async def _tool_dispatch_agent(self, args: dict) -> str:
-        """dispatch_agent 工具实现"""
+        """dispatch_agent 工具实现 — 经统一 Dispatcher 分派（Docker + 外部 Agent）"""
         agent_type = args.get("agent_type", "")
         task = args.get("task", "")
 
         full_task = self._build_worker_task(task)
-        
-        try:
-            container = await self._circuit_breaker.call(
-                self.pool.checkout,
-                agent_card_id=agent_type,
-                task_id=self._current_task_id,
-                model=self.settings.llm.default_model,
-                base_url=self.settings.llm.default_base_url,
-                api_key=self.settings.llm.default_api_key,
-                tenant_id=self._current_tenant_id,
-            )
-        except Exception as e:
-            return f"错误：{e}"
-        
-        if not container:
-            return "错误：没有可用的 Worker 容器。请稍后重试或减少并行 Worker 数量。"
-        
-        dispatch_id = str(uuid.uuid4())[:8]
-        a2a_url = f"http://localhost:{container.port}"
-        a2a_client = A2AClient(a2a_url, timeout=300.0)
-        
-        async def _send():
-            return await a2a_client.send_message(
-                A2AMessage(role="user", text=full_task), blocking=True
-            )
-
-        try:
-            a2a_task = await self._circuit_breaker.call(_send)
-        except Exception as e:
-            await self.pool.return_container(container.container_id)
-            return f"错误：Worker 通信失败: {e}"
-        
-        dispatched = DispatchedAgent(
-            container=container,
-            agent_card_id=agent_type,
-            a2a_task_id=a2a_task.task_id if a2a_task else None,
-            a2a_client=a2a_client,
+        request = DispatchRequest(
+            agent_type=agent_type,
+            task=full_task,
+            context={"task_id": self._current_task_id, "tenant_id": self._current_tenant_id},
         )
-        self._dispatched[dispatch_id] = dispatched
-        
-        state = a2a_task.state if a2a_task else "unknown"
-        result_text = a2a_task.message if a2a_task else "无响应"
-        
+        result = await self._dispatcher.dispatch(request)
+
+        dispatch_id = str(uuid.uuid4())[:8]
+        self._dispatched[dispatch_id] = (agent_type, result)
+
+        state = "completed" if result.success else "failed"
+        text = result.output or result.error or "无响应"
         return (f"已分派 Agent '{agent_type}'（dispatch_id={dispatch_id}）\n"
-                f"容器: {container.container_name}:{container.port}\n"
                 f"任务状态: {state}\n"
-                f"Agent 响应: {result_text[:500]}")
+                f"Agent 响应: {text[:500]}")
     
     def _build_worker_task(self, task: str) -> str:
         """将共享上下文注入 Worker 任务描述"""
@@ -535,81 +492,51 @@ class Orchestrator:
         return task
     
     async def _tool_dispatch_agents_parallel(self, args: dict) -> str:
-        """dispatch_agents_parallel 工具实现 — 并行分派多个 Worker"""
+        """dispatch_agents_parallel 工具实现 — 并行分派多个 Worker（经统一 Dispatcher）"""
         agents_spec = args.get("agents", [])
         if not agents_spec:
             return "错误：agents 列表为空"
 
-        async def _run_single(spec: dict) -> tuple[str, str]:
+        async def _run_single(spec: dict) -> tuple[str, DispatchResult]:
             agent_type = spec.get("agent_type", "")
-            task = spec.get("task", "")
-            full_task = self._build_worker_task(task)
-
-            container = await self.pool.checkout(
-                agent_card_id=agent_type,
-                task_id=self._current_task_id,
-                model=self.settings.llm.default_model,
-                base_url=self.settings.llm.default_base_url,
-                api_key=self.settings.llm.default_api_key,
-                tenant_id=self._current_tenant_id,
+            full_task = self._build_worker_task(spec.get("task", ""))
+            request = DispatchRequest(
+                agent_type=agent_type,
+                task=full_task,
+                context={"task_id": self._current_task_id, "tenant_id": self._current_tenant_id},
             )
-            if not container:
-                return (agent_type, f"错误：没有可用的 Worker 容器")
+            return agent_type, await self._dispatcher.dispatch(request)
 
+        outcomes = await asyncio.gather(*[_run_single(spec) for spec in agents_spec])
+
+        lines = [f"并行分派完成（{len(outcomes)} 个 Agent）："]
+        for agent_type, result in outcomes:
             dispatch_id = str(uuid.uuid4())[:8]
-            a2a_url = f"http://localhost:{container.port}"
-            a2a_client = A2AClient(a2a_url, timeout=300.0)
-
-            message = A2AMessage(role="user", text=full_task)
-            a2a_task = await a2a_client.send_message(message, blocking=True)
-
-            dispatched = DispatchedAgent(
-                container=container,
-                agent_card_id=agent_type,
-                a2a_task_id=a2a_task.task_id if a2a_task else None,
-                a2a_client=a2a_client,
-            )
-
-            async with asyncio.Lock():
-                self._dispatched[dispatch_id] = dispatched
-
-            state = a2a_task.state if a2a_task else "unknown"
-            result_text = a2a_task.message if a2a_task else "无响应"
-
-            return (
-                agent_type,
-                f"Agent '{agent_type}'（dispatch_id={dispatch_id}）\n"
+            self._dispatched[dispatch_id] = (agent_type, result)
+            state = "completed" if result.success else "failed"
+            text = result.output or result.error or "无响应"
+            lines.append(
+                f"\n[{agent_type}（dispatch_id={dispatch_id}）]\n"
                 f"  状态: {state}\n"
-                f"  响应: {result_text[:300]}"
+                f"  响应: {text[:300]}"
             )
-
-        results = await asyncio.gather(*[_run_single(spec) for spec in agents_spec])
-
-        lines = [f"并行分派完成（{len(results)} 个 Agent）："]
-        for agent_type, detail in results:
-            lines.append(f"\n[{agent_type}]\n{detail}")
 
         return "\n".join(lines)
 
     async def _tool_check_agent_status(self, args: dict) -> str:
-        """check_agent_status 工具实现"""
+        """check_agent_status 工具实现 — 返回已分派 Agent 的最终结果"""
         dispatch_id = args.get("dispatch_id", "")
-        dispatched = self._dispatched.get(dispatch_id)
-        
-        if not dispatched:
+        rec = self._dispatched.get(dispatch_id)
+
+        if not rec:
             return f"错误：未找到分派 {dispatch_id}"
-        
-        if not dispatched.a2a_client:
-            return f"Agent {dispatch_id} 无 A2A 连接"
-        
-        if dispatched.a2a_task_id:
-            task = await dispatched.a2a_client.get_task(dispatched.a2a_task_id)
-            if task:
-                return (f"Agent '{dispatched.agent_card_id}'（{dispatch_id}）状态:\n"
-                        f"  状态: {task.state}\n"
-                        f"  最新消息: {task.message[:500] if task.message else '无'}")
-        
-        return f"Agent '{dispatched.agent_card_id}'（{dispatch_id}）无任务状态信息"
+
+        agent_type, result = rec
+        state = "completed" if result.success else "failed"
+        text = result.output or result.error or "无"
+        return (f"Agent '{agent_type}'（{dispatch_id}）状态:\n"
+                f"  状态: {state}\n"
+                f"  最新消息: {text[:500]}")
     
     async def _tool_read_artifacts(self, args: dict) -> str:
         """read_artifacts 工具实现"""

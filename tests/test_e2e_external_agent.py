@@ -25,14 +25,21 @@ class InMemoryRegistry:
 
     async def connect(self): pass
 
-    async def register(self, name, endpoint, protocol="http", skills=None,
-                       capabilities=None, version="1.0", heartbeat_interval=10, **extra):
+    async def register(self, agent_data: dict):
+        # Mirror the real AgentRegistry contract: register(agent_data: dict) -> agent_id
+        name = agent_data["name"]
+        endpoint = agent_data["endpoint"]
+        protocol = agent_data.get("protocol", "http")
+        skills = agent_data.get("skills") or []
+        capabilities = agent_data.get("capabilities") or {}
+        version = agent_data.get("version", "1.0")
+        heartbeat_interval = agent_data.get("heartbeat_interval", 10)
         agent_id = str(uuid.uuid4())[:8]
         now = time.time()
         self._agents[agent_id] = {
             "id": agent_id, "name": name, "endpoint": endpoint,
-            "protocol": protocol, "skills": skills or [],
-            "capabilities": capabilities or {}, "version": version,
+            "protocol": protocol, "skills": skills,
+            "capabilities": capabilities, "version": version,
             "heartbeat_interval": heartbeat_interval,
             "registered_at": now, "last_heartbeat": now,
         }
@@ -40,16 +47,17 @@ class InMemoryRegistry:
         return agent_id
 
     async def heartbeat(self, agent_id):
+        # Mirror real contract: return True if renewed, False if unknown (no raise).
         if agent_id not in self._agents:
-            raise KeyError(f"Agent {agent_id} not found")
+            return False
         self._agents[agent_id]["last_heartbeat"] = time.time()
-        return self._agents[agent_id]["heartbeat_interval"]
+        return True
 
     async def deregister(self, agent_id):
-        if agent_id not in self._agents:
-            raise KeyError(f"Agent {agent_id} not found")
-        info = self._agents.pop(agent_id)
-        self._events.append({"type": "offline", "agent_id": agent_id, "name": info["name"]})
+        # Mirror real contract: safe no-op for unknown; remove + offline event if present.
+        info = self._agents.pop(agent_id, None)
+        if info is not None:
+            self._events.append({"type": "offline", "agent_id": agent_id, "name": info["name"]})
 
     async def get_agent(self, agent_id):
         return self._agents.get(agent_id)
@@ -67,8 +75,8 @@ class InMemoryRegistry:
         return list(self._events)
 
     def sync_register(self, name, endpoint, **kw):
-        return asyncio.get_event_loop().run_until_complete(
-            self.register(name=name, endpoint=endpoint, **kw))
+        data = {"name": name, "endpoint": endpoint, **kw}
+        return asyncio.get_event_loop().run_until_complete(self.register(data))
 
     def sync_deregister(self, agent_id):
         return asyncio.get_event_loop().run_until_complete(self.deregister(agent_id))
