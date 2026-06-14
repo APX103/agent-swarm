@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
@@ -70,6 +71,25 @@ Worker 完成后：
 - "backend-engineer": 后端开发（API/数据库/Python/FastAPI/Node.js）
 - "general-agent": 通用任务（文档、分析、脚本等）
 """
+
+
+def review_artifacts(dispatched_types: list[str], artifacts_dir) -> dict:
+    """检查每个已分派 Agent 是否在自己的角色子目录下产出了文件。
+
+    角色子目录取 agent_type 的第一段（frontend-ux-pro -> frontend），与 worker 写盘一致。
+    返回 {'passed': bool, 'missing': [...], 'per_agent': {agent_type: file_count}}。
+    """
+    artifacts_dir = Path(artifacts_dir)
+    per_agent: dict[str, int] = {}
+    missing: list[str] = []
+    for agent_type in dispatched_types:
+        sub = agent_type.split("-")[0]
+        d = artifacts_dir / sub
+        files = [f for f in d.rglob("*") if f.is_file()] if d.exists() else []
+        per_agent[agent_type] = len(files)
+        if not files:
+            missing.append(agent_type)
+    return {"passed": not missing, "missing": missing, "per_agent": per_agent}
 
 
 class Orchestrator:
@@ -371,6 +391,7 @@ class Orchestrator:
                 break
             
             # 处理每个工具调用
+            finalize_ok = False
             for tool_call in msg.tool_calls:
                 fn_name = tool_call.function.name
                 fn_args = json.loads(tool_call.function.arguments)
@@ -389,17 +410,21 @@ class Orchestrator:
                     "content": result,
                 })
                 
-                # 如果是 finalize，提取结果并退出
+                # finalize：仅当 review 通过才完成；否则继续循环让编排器重新 dispatch
                 if fn_name == "finalize":
-                    try:
-                        args = json.loads(fn_args) if isinstance(fn_args, str) else fn_args
-                        final_result = args.get("summary", result)
-                    except Exception:
-                        final_result = result
-                    break
-            
-            # 检查是否 finalize 已经被调用
-            if any(tc.function.name == "finalize" for tc in msg.tool_calls):
+                    if "[REVIEW_FAILED]" in result:
+                        logger.info("finalize blocked by review: %s", result[:200])
+                    else:
+                        try:
+                            fargs = json.loads(fn_args) if isinstance(fn_args, str) else fn_args
+                            final_result = fargs.get("summary", result)
+                        except Exception:
+                            final_result = result
+                        finalize_ok = True
+                        break
+
+            # 仅在 finalize 通过 review 后退出
+            if finalize_ok:
                 break
         
         # 清理：容器归还已由 Dispatcher 在每次 dispatch 的 finally 内完成，这里仅清理分派记录
@@ -600,6 +625,19 @@ class Orchestrator:
     async def _tool_finalize(self, args: dict) -> str:
         """finalize 工具实现 — 验证产出物后完成任务"""
         summary = args.get("summary", "")
+
+        # 强制 review：每个已分派 Agent 必须产出文件，否则拒绝完成（让编排器重新 dispatch）
+        if self.task_manager and self._dispatched:
+            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            if artifacts_dir:
+                dispatched_types = [t for t, _ in self._dispatched.values()]
+                review = review_artifacts(dispatched_types, artifacts_dir)
+                if not review["passed"]:
+                    return (
+                        f"[REVIEW_FAILED] 审查未通过，以下已分派 Agent 未产出文件: "
+                        f"{', '.join(review['missing'])}。"
+                        f"请用 dispatch_agent 让它们产出后再次 finalize。"
+                    )
 
         artifact_warning = ""
         if self.task_manager:
