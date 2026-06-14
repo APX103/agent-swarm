@@ -143,3 +143,31 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
 
 # 全局单例
 settings = load_settings()
+
+
+def validate_settings(s: "Settings") -> list[str]:
+    """Return a list of human-readable warnings about likely-misconfigured settings.
+
+    Called at startup so operators see problems early (fail-fast / defensive).
+    An empty list means no issues detected.
+    """
+    warnings: list[str] = []
+
+    if not s.llm.default_api_key:
+        warnings.append("llm.default_api_key is empty; worker dispatch will fail without a key")
+    if not s.llm.default_base_url:
+        warnings.append("llm.default_base_url is empty")
+
+    if s.orchestrator.provider == "external" and not s.orchestrator.external_endpoint:
+        warnings.append(
+            "orchestrator.provider='external' but external_endpoint is empty; "
+            "the resolver will fall back to builtin"
+        )
+
+    if s.container_pool.pool_size <= 0:
+        warnings.append("container_pool.pool_size <= 0; no warm workers will be available")
+
+    if not s.storage.shared_output_base:
+        warnings.append("storage.shared_output_base is empty; artifacts cannot be stored")
+
+    return warnings

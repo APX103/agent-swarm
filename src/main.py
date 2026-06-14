@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.config import settings
+from src.config import settings, validate_settings
 from src.task_manager.manager import TaskManager
 from src.container_pool.pool import ContainerPoolManager
 from src.orchestrator.orchestrator import Orchestrator
@@ -42,7 +42,11 @@ async def _lifespan(app: FastAPI):
     global pool_manager, task_manager, orchestrator, registry, adapter_manager
     
     logger.info("🐝 Agent Swarm starting up...")
-    
+
+    # 0. 启动期配置自检（fail-fast 警告，不阻断启动）
+    for warning in validate_settings(settings):
+        logger.warning("config check: %s", warning)
+
     # 1. 初始化任务管理器
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
