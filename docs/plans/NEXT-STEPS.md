@@ -134,6 +134,14 @@ docker rm -f swarm-redis swarm-worker-{0..4}
 - 任务产物留存：`shared_output/tenants/default/tasks/e6e10d60/`。**这取代了之前"只测过 trivial 单页"的保留意见。**
 - 复跑：见上方「E2E 复跑步骤」+ 改 POST 的 message 为多 Agent 工程任务即可。
 
+### 🔔 终极 E2E（多 Agent 分工 + 联调 + 浏览器渲染验证）— 2026-06-15 ✅
+- 任务 `27dac4a8`：前后端分离 TODO（FastAPI 4 个接口 + HTML 前端 CRUD）。
+- **多 Agent 调度**：编排器 `plan_task → dispatch_agents_parallel(backend+frontend)`，**第三步 `dispatch_agent(frontend,"联调最小化修正/接口一致性")`** —— 主动审查两份产出并要求前端对齐后端接口（即"分离又协作"）。
+- **联调对齐**：后端路由 `GET/POST /api/todos`、`PATCH/DELETE /api/todos/{id}` ＋ 模型 `{id,title,done}` ↔ 前端 fetch `${API_BASE}/todos`(GET/POST)、`/todos/${id}`(PATCH/DELETE) ＋ `API_BASE_URL=http://localhost:8000/api` —— **完全一致**。
+- **后端 CRUD 实跑**：POST/PATCH(toggle)/GET(list)/DELETE(200) 全过，无错。
+- **浏览器渲染验证（金标准）**：用 Chrome headless 渲染前端，预置一个 todo 后，**渲染出的 DOM 里确实包含后端返回的数据** —— 证明前端 JS 真的 fetch 后端并渲染，端到端联调成立。
+- 结论：Swarm **能**做"多 Agent 分工 + 必须联调"的工程。产物 `shared_output/tenants/default/tasks/27dac4a8/`。
+
 ## 明天怎么接
 1. 读 `docs/plans/iteration-progress.md`（每 wave 状态 + commit）+ 本文件。
 2. 选一个 P1 开做（建议 **指标** 或 **Redis 持久化**）；仍按 TDD + 每 wave 一 commit + 完成即合并 main 的节奏。
