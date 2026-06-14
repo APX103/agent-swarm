@@ -93,9 +93,34 @@
 
 ## P5 — 验证（人工 / 集成）
 
-### 14. docker e2e 冒烟（始终没跑过）
-- `docker-compose up -d` + 构建 worker 镜像 → `curl /api/chat` 真实任务（builtin 经 Dispatcher→Docker）；注册 mock 外部 Agent → `/invoke`；`provider=external` 指向 mock 调度 Agent → 演示自动回退。
-- 规模：M（人工，需 Docker daemon + key）。
+### 14. docker e2e 冒烟 ✅ 已验证（2026-06-15）
+- **已跑通**：构建 `swarm-worker:latest` → orchestrator (host) + 5 worker 容器 + redis → `POST /api/chat`（"写最简单 hello world 网页"）→ plan_task → dispatch(frontend-ux-pro) → pool checkout swarm-worker-0 → worker 真非阻塞后台执行 + 进度 → 编排器 poll_task 轮询（8 次 POST）→ read/list/review → finalize。产物 `frontend/index.html` 落盘且为合法 HTML5；全程 ~27s；trace_id 贯穿日志。**这同时验证了 W12/W13/W14 流式链路在真实运行时可用**（之前只有 mock 测试）。
+- **本次 E2E 暴露并已就地处理的运行时配置问题**（非代码 bug）：
+  - `config/default.yaml` 模型曾是 `glm-coding-plan`（占位名，端点报 1211 模型不存在）→ 改 `glm-4.7`（coding/paas 端点 `/models` 实际可用：glm-4.5/4.6/4.7/5）。
+  - `storage.shared_output_base` 指向旧机器路径 → 改本机 repo `shared_output`。
+  - docker.io 不可达 → 用本地缓存 `python:3.12.12-slim`（retag 成 `python:3.12-slim`）+ `--pull=false` 离线构建。
+- **还暴露 1 个真 bug（待修）**：`requirements-orchestrator.txt` 缺 `redis` → orchestrator 容器镜像会因 `import redis.asyncio` 崩溃（本次靠 host 运行绕开）。**P3.11 见下。**
+- 规模：✅ done（可重复：见下方「E2E 复跑步骤」）。
+
+### 11b. 【真 bug】orchestrator Docker 镜像缺 redis 依赖
+- `requirements-orchestrator.txt` 没有 `redis`，但 `src/registry/registry.py` 顶部 `import redis.asyncio`、`main.py` 导入 AgentRegistry → orchestrator 容器一启动就 ImportError 崩溃。
+- 修：`requirements-orchestrator.txt` 加 `redis>=5.0.0`（和 `requirements.txt` 对齐）。这样 `docker-compose up`（orchestrator 也进容器）才能跑。
+- 文件：`requirements-orchestrator.txt`。规模：XS。
+
+### E2E 复跑步骤（已验证可跑）
+```bash
+# 1. redis（registry 用）
+docker rm -f swarm-redis 2>/dev/null; docker run -d --name swarm-redis -p 6379:6379 redis:7-alpine
+# 2. worker 镜像（离线，docker.io 不可达时）
+docker tag python:3.12.12-slim python:3.12-slim   # 用本地缓存
+docker build --pull=false -t swarm-worker:latest -f docker/Dockerfile.worker .
+# 3. orchestrator（host；先修 config/default.yaml 的 storage 路径 + model=glm-4.7）
+.venv/bin/python -m uvicorn src.main:app --host 127.0.0.1 --port 9000
+# 4. 打一个任务
+curl -X POST localhost:9000/api/chat -H 'Content-Type: application/json' -d '{"message":"写最简单 hello world 网页"}'
+# 5. 收尾
+docker rm -f swarm-redis swarm-worker-{0..4}
+```
 
 ### 15. 端到端流式集成测试
 - `/api/chat` → orchestrator → dispatcher → mocked worker（流式）→ 断言 `agent_progress` 事件序列。

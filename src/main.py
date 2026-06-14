@@ -89,6 +89,7 @@ async def _lifespan(app: FastAPI):
                 model=settings.llm.default_model,
                 base_url=settings.llm.default_base_url,
                 api_key=settings.llm.default_api_key or "no-key-configured",
+                worker_host=settings.container_pool.worker_host,
             ),
             ExternalAgentBackend(registry=registry, adapter_manager=adapter_manager),
         ],
