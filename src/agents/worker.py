@@ -14,6 +14,11 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+try:
+    from agent_loop import run_agent_loop  # container script layout (/app/agents)
+except ImportError:
+    from src.agents.agent_loop import run_agent_loop  # repo layout
+
 logger = logging.getLogger(__name__)
 
 # 配置（从环境变量或 config.json 读取）
@@ -229,56 +234,63 @@ async def a2a_endpoint(request: Request):
 
 
 async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
-    """处理 message/send"""
+    """处理 message/send。
+
+    blocking=True：同步执行完毕，返回完整 task。
+    blocking=False：立即返回 working，后台执行并把步骤进度写入 task 记录
+                   （供 tasks/get 轮询），完成/失败时更新 status。
+    """
     message_data = params.get("message", {})
     user_text = ""
     for part in message_data.get("parts", []):
         if part.get("kind") == "text":
             user_text += part.get("text", "")
-    
-    # 创建任务
+
+    config = params.get("configuration", {})
+    blocking = config.get("blocking", True)
+
     task_id = str(uuid.uuid4())[:8]
     task = {
         "id": task_id,
         "contextId": TASK_ID,
         "status": {"state": "working", "timestamp": None},
         "history": [message_data],
+        "progress": [],
     }
     _tasks[task_id] = task
-    
-    # 调用 LLM 处理任务
-    try:
-        result = await call_llm(user_text)
-        
-        task["status"] = {"state": "completed"}
-        task["history"].append({
-            "role": "agent",
-            "parts": [{"kind": "text", "text": result}],
-            "messageId": str(uuid.uuid4()),
-        })
-    except Exception as e:
-        task["status"] = {"state": "failed"}
-        task["history"].append({
-            "role": "agent",
-            "parts": [{"kind": "text", "text": f"Error: {e}"}],
-            "messageId": str(uuid.uuid4()),
-        })
-    
-    config = params.get("configuration", {})
-    blocking = config.get("blocking", True)
-    
+
+    def on_progress(event: dict) -> None:
+        task["progress"].append(event)
+
+    async def _run() -> None:
+        try:
+            result = await call_llm(user_text, on_progress=on_progress)
+            task["status"] = {"state": "completed"}
+            task["history"].append({
+                "role": "agent",
+                "parts": [{"kind": "text", "text": result}],
+                "messageId": str(uuid.uuid4()),
+            })
+        except Exception as e:
+            logger.exception("Worker task %s failed", task_id)
+            task["status"] = {"state": "failed"}
+            task["history"].append({
+                "role": "agent",
+                "parts": [{"kind": "text", "text": f"Error: {e}"}],
+                "messageId": str(uuid.uuid4()),
+            })
+
     if blocking:
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": task,
-        })
-    else:
-        return JSONResponse({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {"id": task_id, "status": {"state": "working"}},
-        })
+        await _run()
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
+
+    # non-blocking: run in background, return immediately
+    asyncio.create_task(_run())
+    return JSONResponse({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {"id": task_id, "status": {"state": "working"}},
+    })
 
 
 async def handle_get_task(params: dict, request_id: int) -> JSONResponse:
@@ -309,12 +321,12 @@ async def handle_list_tasks(params: dict, request_id: int) -> JSONResponse:
     })
 
 
-async def call_llm(user_message: str) -> str:
-    """调用 LLM 处理任务"""
+async def call_llm(user_message: str, on_progress=None) -> str:
+    """调用 LLM 处理任务（委托给可测的 run_agent_loop）。"""
     from openai import OpenAI
-    
+
     system_prompt = SYSTEM_PROMPTS.get(AGENT_ROLE, SYSTEM_PROMPTS["general-agent"])
-    
+
     # 构建文件系统工具
     tools = [
         {
@@ -374,23 +386,15 @@ async def call_llm(user_message: str) -> str:
             },
         },
     ]
-    
+
     client = OpenAI(
         api_key=LLM_API_KEY,
         base_url=LLM_BASE_URL,
         timeout=300.0,
     )
-    
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
-    ]
-    
-    max_iterations = 20
-    final_response = ""
-    
-    for _ in range(max_iterations):
-        response = await asyncio.to_thread(
+
+    async def llm_call(messages):
+        return await asyncio.to_thread(
             client.chat.completions.create,
             model=LLM_MODEL,
             messages=messages,
@@ -398,27 +402,15 @@ async def call_llm(user_message: str) -> str:
             temperature=0.3,
             max_tokens=8192,
         )
-        
-        choice = response.choices[0]
-        msg = choice.message
-        messages.append(msg.model_dump())
-        
-        if not msg.tool_calls:
-            final_response = msg.content or ""
-            break
-        
-        for tool_call in msg.tool_calls:
-            fn_name = tool_call.function.name
-            fn_args = json.loads(tool_call.function.arguments)
-            result = execute_file_tool(fn_name, fn_args)
-            
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result,
-            })
-    
-    return final_response
+
+    return await run_agent_loop(
+        llm_call=llm_call,
+        execute_tool=execute_file_tool,
+        system_prompt=system_prompt,
+        user_message=user_message,
+        max_iterations=20,
+        on_progress=on_progress,
+    )
 
 
 def execute_file_tool(name: str, args: dict) -> str:
