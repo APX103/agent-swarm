@@ -17,11 +17,14 @@ from src.gateway import routes as gateway
 from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
 from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
 from src.orchestrator.resolver import OrchestratorResolver
+from src.observability.trace import TraceIdFilter
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+_swarm_handler = logging.StreamHandler()
+_swarm_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] [trace=%(trace_id)s] %(name)s: %(message)s")
 )
+_swarm_handler.addFilter(TraceIdFilter())
+logging.basicConfig(level=logging.INFO, handlers=[_swarm_handler])
 logger = logging.getLogger(__name__)
 
 # 全局依赖

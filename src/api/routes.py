@@ -16,6 +16,7 @@ from src.api.models import TaskStatus
 from src.task_manager.manager import TaskManager
 from src.orchestrator.orchestrator import Orchestrator
 from src.container_pool.pool import ContainerPoolManager
+from src.observability.trace import set_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,10 @@ async def chat(req: ChatRequest):
     
     # 更新状态为运行中
     await task_manager.update_status(task.task_id, TaskStatus.RUNNING)
-    
+
+    # 为本次请求注入 trace id；后台编排任务会继承该上下文，使全程日志可按 task_id 串联
+    set_trace_id(task.task_id)
+
     # 在后台执行编排
     async def run_orchestration():
         try:

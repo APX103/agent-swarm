@@ -230,3 +230,34 @@ async def test_orchestrator_uses_injected_dispatcher(mock_settings, mock_pool, m
     result = await orch._tool_dispatch_agent({"agent_type": "frontend-ux-pro", "task": "x"})
     assert "EXTERNAL-OK" in result
     assert "completed" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_logs_carry_trace_id(mock_settings, mock_pool, mock_task_mgr, caplog):
+    """W4.3: logs emitted during orchestration carry the active trace id."""
+    import logging
+    from src.observability.trace import TraceIdFilter, set_trace_id
+    from src.orchestrator.orchestrator import Orchestrator
+
+    with patch("src.orchestrator.orchestrator.OpenAI") as MockOpenAI:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "done"
+        mock_response.choices[0].message.tool_calls = None
+        mock_client.chat.completions.create.return_value = mock_response
+        MockOpenAI.return_value = mock_client
+
+        orch = Orchestrator(
+            settings=mock_settings, pool_manager=mock_pool, task_manager=mock_task_mgr
+        )
+        caplog.set_level(logging.DEBUG, logger="src.orchestrator.orchestrator")
+        caplog.handler.addFilter(TraceIdFilter())
+
+        set_trace_id("TRACE-XYZ")
+        try:
+            await orch.execute("t1", "default", "hi")
+        finally:
+            set_trace_id(None)
+
+    assert any(getattr(r, "trace_id", None) == "TRACE-XYZ" for r in caplog.records)
