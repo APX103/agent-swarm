@@ -128,6 +128,12 @@ docker rm -f swarm-redis swarm-worker-{0..4}
 
 ---
 
+## ✅ 最高标准 E2E（2026-06-15）：生成完整可运行工程 + 验证能跑
+- **已通过**：用真实 Docker worker 生成一套完整 **TODO 应用**（FastAPI 后端 `backend/main.py`+`requirements.txt` ＋ HTML 前端 `frontend/index.html`）。编排器 `plan_task → dispatch_agents_parallel(backend+frontend) → finalize`，trace 贯穿，W4 review 门确保两 Agent 都产出。
+- **验证可运行**：起后端 `uvicorn main:app` → `GET /` 健康检查 200；`GET /todos` → `[]`；`POST /todos {title}` → `{"id":1,...}`；`GET /todos` → 列表持久；空 title → **HTTP 400 校验生效**。前端合法 HTML 且 `fetch` 调 `/todos`。
+- 任务产物留存：`shared_output/tenants/default/tasks/e6e10d60/`。**这取代了之前"只测过 trivial 单页"的保留意见。**
+- 复跑：见上方「E2E 复跑步骤」+ 改 POST 的 message 为多 Agent 工程任务即可。
+
 ## 明天怎么接
 1. 读 `docs/plans/iteration-progress.md`（每 wave 状态 + commit）+ 本文件。
 2. 选一个 P1 开做（建议 **指标** 或 **Redis 持久化**）；仍按 TDD + 每 wave 一 commit + 完成即合并 main 的节奏。
