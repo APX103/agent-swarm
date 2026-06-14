@@ -37,6 +37,22 @@ def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, re
     orchestrator_resolver = resolver
 
 
+# Per-tenant concurrency cap: backpressure so one tenant can't saturate the workers.
+DEFAULT_TENANT_MAX_CONCURRENT = 4
+_tenant_semaphores: dict[str, asyncio.Semaphore] = {}
+
+
+def _get_tenant_semaphore(
+    tenant_id: str, limit: int = DEFAULT_TENANT_MAX_CONCURRENT
+) -> asyncio.Semaphore:
+    """Return the per-tenant semaphore, creating it lazily on first use."""
+    sem = _tenant_semaphores.get(tenant_id)
+    if sem is None:
+        sem = asyncio.Semaphore(limit)
+        _tenant_semaphores[tenant_id] = sem
+    return sem
+
+
 @router.post("/api/chat", response_model=TaskResponse)
 async def chat(req: ChatRequest):
     """接收用户消息，创建并执行任务"""
@@ -60,19 +76,21 @@ async def chat(req: ChatRequest):
 
     # 在后台执行编排
     async def run_orchestration():
-        try:
-            # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
-            backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator
-            result = await backend.execute(
-                task_id=task.task_id,
-                tenant_id=task.tenant_id,
-                user_message=req.message,
-                event_callback=on_event,
-            )
-            await task_manager.complete_task(task.task_id, result)
-        except Exception as e:
-            logger.error(f"Orchestration failed: {e}", exc_info=True)
-            await task_manager.fail_task(task.task_id, str(e))
+        # per-tenant backpressure: cap in-flight orchestrations per tenant
+        async with _get_tenant_semaphore(task.tenant_id):
+            try:
+                # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
+                backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator
+                result = await backend.execute(
+                    task_id=task.task_id,
+                    tenant_id=task.tenant_id,
+                    user_message=req.message,
+                    event_callback=on_event,
+                )
+                await task_manager.complete_task(task.task_id, result)
+            except Exception as e:
+                logger.error(f"Orchestration failed: {e}", exc_info=True)
+                await task_manager.fail_task(task.task_id, str(e))
     
     asyncio.create_task(run_orchestration())
     
