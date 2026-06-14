@@ -585,13 +585,14 @@ class TestAdapterManager:
             create_adapter({"protocol": "websocket"})
 
     def test_adapter_manager_create_a2a(self):
-        """Protocol 'a2a' creates an OpenAIAdapter (A2A reuses it)."""
+        """Protocol 'a2a' creates a real A2AAdapter (R1.4)."""
+        from src.adapters.a2a_adapter import A2AAdapter
         adapter = create_adapter({
             "protocol": "a2a",
             "base_url": "http://a2a:8080",
-            "model": "default",
         })
-        assert isinstance(adapter, OpenAIAdapter)
+        assert isinstance(adapter, A2AAdapter)
+        assert adapter.base_url == "http://a2a:8080"
 
     def test_adapter_manager_overwrite_warns(self):
         """Re-registering an agent overwrites the existing adapter."""

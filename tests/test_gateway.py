@@ -29,8 +29,11 @@ def _create_gateway_test_app(registry=None, adapter_manager=None):
 def mock_registry():
     reg = MagicMock()
     reg.register = AsyncMock(return_value="agent-001")
-    reg.heartbeat = AsyncMock(return_value=10)
+    reg.heartbeat = AsyncMock(return_value=True)  # real registry returns bool
     reg.deregister = AsyncMock()
+    reg.get_agent = AsyncMock(return_value={  # used by deregister existence check
+        "id": "agent-001", "name": "worker-a", "endpoint": "http://x",
+    })
     reg.list_agents = AsyncMock(return_value=[
         {"agent_id": "agent-001", "name": "worker-a", "skills": ["code"]},
         {"agent_id": "agent-002", "name": "worker-b", "skills": ["design"]},
@@ -89,13 +92,13 @@ def test_register_agent_success(client, mock_registry):
     assert data["heartbeat_interval"] == 15
     assert data["status"] == "registered"
 
-    mock_registry.register.assert_awaited_once_with(
-        name="test-agent",
-        endpoint="http://localhost:8001",
-        protocol="http",
-        skills=["code", "review"],
-        heartbeat_interval=15,
-    )
+    # real contract: register takes a single agent_data dict
+    mock_registry.register.assert_awaited_once_with({
+        "name": "test-agent",
+        "endpoint": "http://localhost:8001",
+        "protocol": "http",
+        "skills": ["code", "review"],
+    })
 
 
 def test_register_agent_defaults(client, mock_registry):
@@ -108,13 +111,12 @@ def test_register_agent_defaults(client, mock_registry):
     assert data["heartbeat_interval"] == 10  # default
     assert data["status"] == "registered"
 
-    mock_registry.register.assert_awaited_once_with(
-        name="minimal-agent",
-        endpoint="http://localhost:9000",
-        protocol="http",
-        skills=[],
-        heartbeat_interval=10,
-    )
+    mock_registry.register.assert_awaited_once_with({
+        "name": "minimal-agent",
+        "endpoint": "http://localhost:9000",
+        "protocol": "http",
+        "skills": [],
+    })
 
 
 def test_register_agent_missing_name(client):
@@ -162,7 +164,8 @@ def test_heartbeat_success(client, mock_registry):
 
 def test_heartbeat_unknown_agent(client, mock_registry):
     """POST /{agent_id}/heartbeat for unknown agent returns 404."""
-    mock_registry.heartbeat.side_effect = KeyError("agent-999")
+    # real registry returns False (not raises) for unknown agents
+    mock_registry.heartbeat.return_value = False
     resp = client.post("/api/v1/agents/agent-999/heartbeat")
     assert resp.status_code == 404
     assert "agent-999" in resp.json()["detail"]
@@ -180,7 +183,8 @@ def test_deregister_success(client, mock_registry):
 
 def test_deregister_unknown_agent(client, mock_registry):
     """POST /{agent_id}/deregister for unknown agent returns 404."""
-    mock_registry.deregister.side_effect = KeyError("agent-999")
+    # gateway checks existence via get_agent; None -> 404
+    mock_registry.get_agent.return_value = None
     resp = client.post("/api/v1/agents/agent-999/deregister")
     assert resp.status_code == 404
 

@@ -141,3 +141,26 @@ def test_health(mock_pool, mock_task_manager, mock_orchestrator):
     assert data["status"] == "ok"
     assert data["pool_total"] == 5
     assert data["pool_available"] == 3
+
+
+def test_chat_uses_resolver_when_set(mock_pool, mock_task_manager, mock_orchestrator):
+    """R3.4: when a resolver is wired via set_deps, /api/chat routes through it."""
+    from src.api.routes import router, set_deps
+    from fastapi import FastAPI
+
+    resolver = MagicMock()
+    resolver.execute = AsyncMock(return_value="RESOLVED-OK")
+    set_deps(mock_orchestrator, mock_task_manager, mock_pool, resolver=resolver)
+
+    @asynccontextmanager
+    async def empty(app):
+        yield
+
+    app = FastAPI(lifespan=empty)
+    app.include_router(router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post("/api/chat", json={"message": "x"})
+    assert resp.status_code == 200
+    resolver.execute.assert_awaited_once()
+    mock_orchestrator.execute.assert_not_awaited()

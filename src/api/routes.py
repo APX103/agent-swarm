@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, Header
 from fastapi.responses import FileResponse
 
 from src.api.models import (
@@ -16,6 +16,8 @@ from src.api.models import TaskStatus
 from src.task_manager.manager import TaskManager
 from src.orchestrator.orchestrator import Orchestrator
 from src.container_pool.pool import ContainerPoolManager
+from src.observability.trace import set_trace_id
+from src.reliability.dead_letter import DeadLetterRecord, DeadLetterStore
 
 logger = logging.getLogger(__name__)
 
@@ -25,23 +27,83 @@ router = APIRouter()
 orchestrator: Optional[Orchestrator] = None
 task_manager: Optional[TaskManager] = None
 pool_manager: Optional[ContainerPoolManager] = None
+orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
+
+# Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
+_idempotency_index: dict[str, str] = {}
+
+# Dead-letter store for failed orchestrations.
+dead_letters = DeadLetterStore()
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager):
-    global orchestrator, task_manager, pool_manager
+def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None):
+    global orchestrator, task_manager, pool_manager, orchestrator_resolver
     orchestrator = orch
     task_manager = tm
     pool_manager = pool
+    orchestrator_resolver = resolver
+
+
+# Per-tenant concurrency cap: backpressure so one tenant can't saturate the workers.
+DEFAULT_TENANT_MAX_CONCURRENT = 4
+_tenant_semaphores: dict[str, asyncio.Semaphore] = {}
+
+
+def _get_tenant_semaphore(
+    tenant_id: str, limit: int = DEFAULT_TENANT_MAX_CONCURRENT
+) -> asyncio.Semaphore:
+    """Return the per-tenant semaphore, creating it lazily on first use."""
+    sem = _tenant_semaphores.get(tenant_id)
+    if sem is None:
+        sem = asyncio.Semaphore(limit)
+        _tenant_semaphores[tenant_id] = sem
+    return sem
+
+
+# Live orchestration tasks, for real cancellation (not just a status flip).
+_running_orchestrations: dict[str, asyncio.Task] = {}
+
+
+def register_running(task_id: str, orch_task: asyncio.Task) -> None:
+    """Track a running orchestration task so it can be cancelled later."""
+    _running_orchestrations[task_id] = orch_task
+    orch_task.add_done_callback(lambda _t, tid=task_id: _running_orchestrations.pop(tid, None))
+
+
+def cancel_running(task_id: str) -> bool:
+    """Cancel a running orchestration task. Returns False if none / already done."""
+    orch_task = _running_orchestrations.get(task_id)
+    if orch_task is None or orch_task.done():
+        return False
+    orch_task.cancel()
+    return True
 
 
 @router.post("/api/chat", response_model=TaskResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")):
     """接收用户消息，创建并执行任务"""
+    # 幂等：同一 Idempotency-Key 复用已有 task，不重复编排
+    if idempotency_key:
+        existing_id = _idempotency_index.get(idempotency_key)
+        if existing_id is not None and task_manager is not None:
+            existing = task_manager.get_task(existing_id)
+            if existing is not None:
+                logger.info("idempotent replay key=%s -> task=%s", idempotency_key, existing_id)
+                return TaskResponse(
+                    task_id=existing.task_id,
+                    status=existing.status,
+                    message=existing.result,
+                    artifacts=existing.artifacts,
+                )
+
     # 创建任务
     task = await task_manager.create_task(
         user_message=req.message,
         tenant_id=req.tenant_id or "default",
     )
+
+    if idempotency_key:
+        _idempotency_index[idempotency_key] = task.task_id
     
     # 订阅事件到 WebSocket 广播
     async def on_event(event: dict):
@@ -51,22 +113,36 @@ async def chat(req: ChatRequest):
     
     # 更新状态为运行中
     await task_manager.update_status(task.task_id, TaskStatus.RUNNING)
-    
+
+    # 为本次请求注入 trace id；后台编排任务会继承该上下文，使全程日志可按 task_id 串联
+    set_trace_id(task.task_id)
+
     # 在后台执行编排
     async def run_orchestration():
-        try:
-            result = await orchestrator.execute(
-                task_id=task.task_id,
-                tenant_id=task.tenant_id,
-                user_message=req.message,
-                event_callback=on_event,
-            )
-            await task_manager.complete_task(task.task_id, result)
-        except Exception as e:
-            logger.error(f"Orchestration failed: {e}", exc_info=True)
-            await task_manager.fail_task(task.task_id, str(e))
+        # per-tenant backpressure: cap in-flight orchestrations per tenant
+        async with _get_tenant_semaphore(task.tenant_id):
+            try:
+                # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
+                backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator
+                result = await backend.execute(
+                    task_id=task.task_id,
+                    tenant_id=task.tenant_id,
+                    user_message=req.message,
+                    event_callback=on_event,
+                )
+                await task_manager.complete_task(task.task_id, result)
+            except Exception as e:
+                logger.error(f"Orchestration failed: {e}", exc_info=True)
+                dead_letters.record(DeadLetterRecord(
+                    task_id=task.task_id,
+                    tenant_id=task.tenant_id,
+                    error=str(e),
+                    user_message=req.message,
+                ))
+                await task_manager.fail_task(task.task_id, str(e))
     
-    asyncio.create_task(run_orchestration())
+    orch_task = asyncio.create_task(run_orchestration())
+    register_running(task.task_id, orch_task)
     
     return TaskResponse(
         task_id=task.task_id,
@@ -167,6 +243,21 @@ async def health():
     )
 
 
+@router.get("/api/v1/dead-letters")
+async def list_dead_letters(limit: int = Query(50)):
+    """List recent dead-letter records (failed orchestrations)."""
+    return [
+        {
+            "task_id": r.task_id,
+            "tenant_id": r.tenant_id,
+            "error": r.error,
+            "user_message": r.user_message,
+            "timestamp": r.timestamp,
+        }
+        for r in dead_letters.recent(limit)
+    ]
+
+
 @router.websocket("/ws/tasks/{task_id}")
 async def task_websocket(websocket: WebSocket, task_id: str):
     """WebSocket 实时任务事件流"""
@@ -185,6 +276,7 @@ async def task_websocket(websocket: WebSocket, task_id: str):
         while True:
             data = await websocket.receive_json()
             if data.get("action") == "cancel":
+                cancel_running(task_id)
                 await task_manager.update_status(task_id, TaskStatus.CANCELLED)
                 break
     except WebSocketDisconnect:

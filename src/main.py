@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.config import settings
+from src.config import settings, validate_settings
 from src.task_manager.manager import TaskManager
 from src.container_pool.pool import ContainerPoolManager
 from src.orchestrator.orchestrator import Orchestrator
@@ -14,11 +14,19 @@ from src.api.routes import router, set_deps
 from src.registry.registry import AgentRegistry
 from src.adapters.adapter_manager import AdapterManager
 from src.gateway import routes as gateway
+from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
+from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
+from src.dispatcher.result_cache import ResultCache
+from src.orchestrator.resolver import OrchestratorResolver
+from src.observability.trace import TraceIdFilter
+from src.registry.sweeper import health_sweep_loop
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+_swarm_handler = logging.StreamHandler()
+_swarm_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] [trace=%(trace_id)s] %(name)s: %(message)s")
 )
+_swarm_handler.addFilter(TraceIdFilter())
+logging.basicConfig(level=logging.INFO, handlers=[_swarm_handler])
 logger = logging.getLogger(__name__)
 
 # 全局依赖
@@ -35,7 +43,11 @@ async def _lifespan(app: FastAPI):
     global pool_manager, task_manager, orchestrator, registry, adapter_manager
     
     logger.info("🐝 Agent Swarm starting up...")
-    
+
+    # 0. 启动期配置自检（fail-fast 警告，不阻断启动）
+    for warning in validate_settings(settings):
+        logger.warning("config check: %s", warning)
+
     # 1. 初始化任务管理器
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
@@ -47,9 +59,11 @@ async def _lifespan(app: FastAPI):
         redis_url=settings.redis.redis_url,
         heartbeat_ttl=settings.redis.heartbeat_ttl,
     )
+    _sweep_task = None
     try:
         await registry.connect()
         logger.info("AgentRegistry connected to Redis")
+        _sweep_task = asyncio.create_task(health_sweep_loop(registry, interval=60.0))
     except Exception as e:
         logger.warning(f"AgentRegistry Redis connect failed (running degraded): {e}")
     
@@ -67,16 +81,33 @@ async def _lifespan(app: FastAPI):
         logger.error(f"ContainerPool startup failed (running in mock mode): {e}")
         logger.warning("Will operate without real Docker containers")
     
-    # 5. 初始化编排器
+    # 5. 初始化统一 Dispatcher（Docker 容器 + 外部注册 Agent 同为候选）
+    dispatcher = Dispatcher(
+        [
+            DockerBackend(
+                pool=pool_manager,
+                model=settings.llm.default_model,
+                base_url=settings.llm.default_base_url,
+                api_key=settings.llm.default_api_key or "no-key-configured",
+            ),
+            ExternalAgentBackend(registry=registry, adapter_manager=adapter_manager),
+        ],
+        DispatcherConfig(),
+        result_cache=ResultCache(),
+    )
+
+    # 6. 初始化编排器（注入 Dispatcher）
     orchestrator = Orchestrator(
         settings=settings,
         pool_manager=pool_manager,
         task_manager=task_manager,
+        dispatcher=dispatcher,
     )
-    logger.info("Orchestrator initialized")
-    
-    # 6. 注入依赖
-    set_deps(orchestrator, task_manager, pool_manager)
+    logger.info("Orchestrator initialized (unified dispatcher wired)")
+
+    # 7. 组装可插拔编排器解析器并注入依赖
+    resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
+    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver)
     
     logger.info("🐝 Agent Swarm ready!")
     
@@ -84,6 +115,12 @@ async def _lifespan(app: FastAPI):
     
     # 清理
     logger.info("🐝 Agent Swarm shutting down...")
+    if _sweep_task:
+        _sweep_task.cancel()
+        try:
+            await _sweep_task
+        except asyncio.CancelledError:
+            pass
     if registry:
         try:
             await registry.close()

@@ -5,6 +5,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+from src.orchestrator.base import OrchestratorConfig
+
 
 BASE_DIR = Path(__file__).parent.parent
 CONFIG_PATH = os.environ.get("SWARM_CONFIG", str(BASE_DIR / "config" / "default.yaml"))
@@ -75,6 +77,7 @@ class Settings:
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     agent_cards: list[AgentCardDef] = field(default_factory=list)
+    orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
 
 
 def load_settings(config_path: Optional[str] = None) -> Settings:
@@ -120,8 +123,51 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
                 skills=card.get("skills", []),
             ))
 
+    if "orchestrator" in data:
+        o = data["orchestrator"]
+        settings.orchestrator = OrchestratorConfig(
+            provider=o.get("provider", "builtin"),
+            external_endpoint=o.get("external_endpoint", ""),
+            external_timeout=float(o.get("external_timeout", 600.0)),
+            fallback=bool(o.get("fallback", True)),
+        )
+
+    # Environment overrides for orchestrator selection.
+    if os.environ.get("ORCHESTRATOR_PROVIDER"):
+        settings.orchestrator.provider = os.environ["ORCHESTRATOR_PROVIDER"]
+    if os.environ.get("ORCHESTRATOR_EXTERNAL_ENDPOINT"):
+        settings.orchestrator.external_endpoint = os.environ["ORCHESTRATOR_EXTERNAL_ENDPOINT"]
+
     return settings
 
 
 # 全局单例
 settings = load_settings()
+
+
+def validate_settings(s: "Settings") -> list[str]:
+    """Return a list of human-readable warnings about likely-misconfigured settings.
+
+    Called at startup so operators see problems early (fail-fast / defensive).
+    An empty list means no issues detected.
+    """
+    warnings: list[str] = []
+
+    if not s.llm.default_api_key:
+        warnings.append("llm.default_api_key is empty; worker dispatch will fail without a key")
+    if not s.llm.default_base_url:
+        warnings.append("llm.default_base_url is empty")
+
+    if s.orchestrator.provider == "external" and not s.orchestrator.external_endpoint:
+        warnings.append(
+            "orchestrator.provider='external' but external_endpoint is empty; "
+            "the resolver will fall back to builtin"
+        )
+
+    if s.container_pool.pool_size <= 0:
+        warnings.append("container_pool.pool_size <= 0; no warm workers will be available")
+
+    if not s.storage.shared_output_base:
+        warnings.append("storage.shared_output_base is empty; artifacts cannot be stored")
+
+    return warnings

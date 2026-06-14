@@ -64,3 +64,10 @@ agent_cards:
         name: "General Task"
         description: "处理通用任务"
         tags: ["general", "coding", "writing", "analysis"]
+
+# 编排器配置（可插拔调度 Agent）
+orchestrator:
+  provider: "builtin"            # "builtin" | "external"
+  external_endpoint: ""          # 外部调度 Agent 的 A2A URL（provider=external 时必填）
+  external_timeout: 600
+  fallback: true                 # 外部不可用时自动回退内置（日志 + 事件显式标注，不静默吞错）

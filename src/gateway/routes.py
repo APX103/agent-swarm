@@ -3,7 +3,10 @@ import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+from src.adapters.adapter_manager import create_adapter
+from src.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -13,18 +16,37 @@ router = APIRouter(prefix="/api/v1/agents")
 _registry = None
 _adapter_manager = None
 
+# Default heartbeat interval (seconds) advertised to agents. The real
+# AgentRegistry does not store a per-agent interval, so the gateway surfaces
+# this default rather than leaking the registry's bool return value.
+DEFAULT_HEARTBEAT_INTERVAL = 10
+
+# Per-agent circuit breakers guarding /invoke against failing external agents.
+_invoke_breakers: dict[str, CircuitBreaker] = {}
+
+
+def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
+    """Return the per-agent circuit breaker, creating it lazily."""
+    cb = _invoke_breakers.get(agent_id)
+    if cb is None:
+        cb = CircuitBreaker()
+        _invoke_breakers[agent_id] = cb
+    return cb
+
 
 def set_deps(registry, adapter_manager):
     """Set gateway dependencies (called from main.py lifespan)."""
     global _registry, _adapter_manager
     _registry = registry
     _adapter_manager = adapter_manager
+    _invoke_breakers.clear()  # reset breaker state on (re)wiring
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 
 class AgentRegistration(BaseModel):
+    model_config = ConfigDict(extra="allow")  # accept adapter-specific fields (base_url, command, ...)
     name: str
     endpoint: str
     protocol: str = "http"
@@ -59,30 +81,94 @@ class AgentResult(BaseModel):
     error: Optional[str] = None
 
 
+# Protocols backed by a real adapter (auto-provisioned on register).
+ADAPTER_PROTOCOLS: tuple[str, ...] = ("openai", "cli", "mcp", "a2a")
+# All protocols accepted at registration time (adapter protocols + generic http).
+KNOWN_PROTOCOLS: tuple[str, ...] = ADAPTER_PROTOCOLS + ("http",)
+
+
+def _build_adapter_info(body: AgentRegistration) -> dict:
+    """Translate a registration body into an adapter info dict.
+
+    Protocol-specific connection config may be supplied as extra fields
+    (base_url/model/api_key, command/args, server_url, ...). When omitted, the
+    registration ``endpoint`` is used as the connection target.
+    """
+    extra = body.model_dump(exclude={"name", "endpoint", "protocol", "skills", "heartbeat_interval"})
+    info: dict = {"protocol": body.protocol, **extra}
+    if body.protocol in ("openai", "a2a"):
+        info.setdefault("base_url", body.endpoint)
+    elif body.protocol == "cli":
+        info.setdefault("command", body.endpoint)
+        info.setdefault("args", [])
+    elif body.protocol == "mcp":
+        info.setdefault("server_url", body.endpoint)
+    return info
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
 @router.post("/register", response_model=RegistrationResponse)
 async def register_agent(body: AgentRegistration):
-    """Register a new external agent."""
+    """Register a new external agent.
+
+    For adapter protocols (openai/cli/mcp/a2a) an adapter is auto-provisioned so the
+    agent is immediately invocable. Validation happens before any state is written: a
+    bad protocol or adapter config is rejected (400) with nothing persisted.
+    """
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
+
+    # 1. validate protocol
+    if body.protocol not in KNOWN_PROTOCOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown protocol '{body.protocol}'. Supported: {', '.join(KNOWN_PROTOCOLS)}",
+        )
+
+    # 2. for adapter protocols, validate+build the adapter BEFORE persisting, so a bad
+    #    config is rejected cleanly (400) with nothing to roll back.
+    adapter = None
+    if body.protocol in ADAPTER_PROTOCOLS:
+        if _adapter_manager is None:
+            raise HTTPException(status_code=503, detail="Adapter manager not available")
+        try:
+            adapter = create_adapter(_build_adapter_info(body))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid adapter config: {e}")
+
+    # 3. persist the agent
+    agent_data = {
+        "name": body.name,
+        "endpoint": body.endpoint,
+        "protocol": body.protocol,
+        "skills": body.skills,
+    }
     try:
-        agent_id = await _registry.register(
-            name=body.name,
-            endpoint=body.endpoint,
-            protocol=body.protocol,
-            skills=body.skills,
-            heartbeat_interval=body.heartbeat_interval,
-        )
-        return RegistrationResponse(
-            agent_id=agent_id,
-            heartbeat_interval=body.heartbeat_interval,
-            status="registered",
-        )
+        agent_id = await _registry.register(agent_data)
     except Exception as e:
         logger.exception("Failed to register agent")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # 4. register the already-validated adapter (roll back on unexpected failure)
+    if adapter is not None:
+        try:
+            _adapter_manager.register(agent_id, adapter)
+        except Exception:
+            logger.exception("Failed to register adapter for %s; rolling back", agent_id)
+            try:
+                await _registry.deregister(agent_id)
+            except Exception:
+                logger.warning("Rollback deregister failed for %s", agent_id, exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to provision adapter")
+
+    logger.info("Registered agent %s (%s, protocol=%s)", agent_id, body.name, body.protocol)
+    return RegistrationResponse(
+        agent_id=agent_id,
+        heartbeat_interval=body.heartbeat_interval,
+        status="registered",
+    )
 
 
 @router.post("/{agent_id}/heartbeat", response_model=HeartbeatResponse)
@@ -90,17 +176,15 @@ async def heartbeat(agent_id: str):
     """Receive heartbeat from an agent."""
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
+    # AgentRegistry.heartbeat(agent_id) -> bool (True=renewed, False=unknown).
     try:
-        interval = await _registry.heartbeat(agent_id)
-        return HeartbeatResponse(
-            status="ok",
-            next_heartbeat_in=interval,
-        )
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        renewed = await _registry.heartbeat(agent_id)
     except Exception as e:
         logger.exception("Heartbeat failed")
         raise HTTPException(status_code=500, detail=str(e))
+    if not renewed:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    return HeartbeatResponse(status="ok", next_heartbeat_in=DEFAULT_HEARTBEAT_INTERVAL)
 
 
 @router.post("/{agent_id}/deregister", response_model=DeregisterResponse)
@@ -108,14 +192,19 @@ async def deregister_agent(agent_id: str):
     """Remove an agent from the registry."""
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
+    # AgentRegistry.deregister is a safe no-op for unknown ids, so check existence
+    # explicitly to distinguish 404 from idempotent removal.
     try:
+        existing = await _registry.get_agent(agent_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
         await _registry.deregister(agent_id)
-        return DeregisterResponse(status="deregistered")
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Deregister failed")
         raise HTTPException(status_code=500, detail=str(e))
+    return DeregisterResponse(status="deregistered")
 
 
 @router.get("", response_model=list)
@@ -134,24 +223,30 @@ async def list_agents(skill: Optional[str] = Query(None)):
 
 @router.post("/{agent_id}/invoke", response_model=AgentResult)
 async def invoke_agent(agent_id: str, body: InvokeRequest):
-    """Invoke a registered agent with a task."""
+    """Invoke a registered agent with a task (guarded by a per-agent circuit breaker)."""
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
     if _adapter_manager is None:
         raise HTTPException(status_code=503, detail="Adapter manager not available")
+    adapter = _adapter_manager.get(agent_id)
+    if adapter is None:
+        raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
+
+    breaker = _get_invoke_breaker(agent_id)
     try:
-        adapter = _adapter_manager.get(agent_id)
-        if adapter is None:
-            raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
-        result = await adapter.invoke(task=body.task, context=body.context)
-        return AgentResult(
-            agent_id=agent_id,
-            success=result.success,
-            result=result.output,
-            error=result.error,
-        )
-    except (KeyError, HTTPException):
-        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        result = await breaker.call(adapter.invoke, body.task, body.context)
+    except CircuitOpenError as e:
+        logger.warning("Invoke rejected (circuit open) for agent %s: %s", agent_id, e)
+        raise HTTPException(status_code=503, detail=f"Agent {agent_id} circuit open: {e}")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("Invoke failed")
+        logger.exception("Invoke failed for agent %s", agent_id)
         raise HTTPException(status_code=500, detail=str(e))
+
+    return AgentResult(
+        agent_id=agent_id,
+        success=result.success,
+        result=result.output,
+        error=result.error,
+    )
