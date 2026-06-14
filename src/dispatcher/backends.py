@@ -60,9 +60,22 @@ class DockerBackend:
         a2a_task = None
         send_error: Optional[str] = None
         try:
-            a2a_task = await client.send_message(
-                A2AMessage(role="user", text=request.task), blocking=True
-            )
+            if request.on_progress is not None:
+                # streaming: send non-blocking, then poll and forward snapshots
+                a2a_task = await client.send_message(
+                    A2AMessage(role="user", text=request.task), blocking=False
+                )
+                if a2a_task is not None:
+                    async for snap in client.poll_task(a2a_task.task_id, interval=2.0, timeout=300.0):
+                        try:
+                            await request.on_progress({"state": snap.state, "message": snap.message})
+                        except Exception:
+                            logger.warning("progress callback failed", exc_info=True)
+                        a2a_task = snap
+            else:
+                a2a_task = await client.send_message(
+                    A2AMessage(role="user", text=request.task), blocking=True
+                )
         except Exception as e:
             logger.exception("Docker A2A send failed for %s", target.agent_type)
             send_error = f"A2A send error: {e!s}"

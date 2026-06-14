@@ -8,7 +8,7 @@ containers and/or externally-registered agents).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Protocol
+from typing import Awaitable, Callable, Literal, Optional, Protocol
 
 
 class TargetKind:
@@ -41,6 +41,9 @@ class DispatchRequest:
     context: dict = field(default_factory=dict)
     shared_context: str = ""
     timeout: Optional[float] = None
+    # Optional async progress callback (streaming). When set, streaming-capable
+    # backends send non-blocking and forward worker snapshots here.
+    on_progress: Optional[Callable[[dict], Awaitable[None]]] = None
 
 
 @dataclass

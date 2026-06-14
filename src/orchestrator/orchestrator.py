@@ -108,6 +108,7 @@ class Orchestrator:
         self._current_task_id: Optional[str] = None
         self._current_tenant_id: Optional[str] = None
         self._shared_context: str = ""  # plan_task 生成的共享上下文
+        self._current_emit = None  # set during execute(), used to forward worker progress
 
         # 工具定义
         self._tools = self._define_tools()
@@ -318,6 +319,8 @@ class Orchestrator:
                     "agent": agent,
                     "data": data,
                 })
+
+        self._current_emit = emit  # lets dispatch tools forward worker progress
         
         max_iterations = 25  # 允许更多迭代以容纳 plan → dispatch → review 流程
         final_result = "任务执行完毕，但未产生最终结果。"
@@ -401,6 +404,7 @@ class Orchestrator:
         
         # 清理：容器归还已由 Dispatcher 在每次 dispatch 的 finally 内完成，这里仅清理分派记录
         self._dispatched.clear()
+        self._current_emit = None
 
         return final_result
     
@@ -469,10 +473,20 @@ class Orchestrator:
         task = args.get("task", "")
 
         full_task = self._build_worker_task(task)
+
+        # forward worker mid-flight progress to the event stream (WebSocket)
+        on_progress = None
+        if self._current_emit is not None:
+            emit = self._current_emit
+
+            async def on_progress(event: dict) -> None:
+                await emit("agent_progress", {"agent": agent_type, **event}, agent=agent_type)
+
         request = DispatchRequest(
             agent_type=agent_type,
             task=full_task,
             context={"task_id": self._current_task_id, "tenant_id": self._current_tenant_id},
+            on_progress=on_progress,
         )
         result = await self._dispatcher.dispatch(request)
 
