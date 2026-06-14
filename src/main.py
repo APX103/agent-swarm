@@ -18,6 +18,7 @@ from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
 from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
 from src.orchestrator.resolver import OrchestratorResolver
 from src.observability.trace import TraceIdFilter
+from src.registry.sweeper import health_sweep_loop
 
 _swarm_handler = logging.StreamHandler()
 _swarm_handler.setFormatter(
@@ -53,9 +54,11 @@ async def _lifespan(app: FastAPI):
         redis_url=settings.redis.redis_url,
         heartbeat_ttl=settings.redis.heartbeat_ttl,
     )
+    _sweep_task = None
     try:
         await registry.connect()
         logger.info("AgentRegistry connected to Redis")
+        _sweep_task = asyncio.create_task(health_sweep_loop(registry, interval=60.0))
     except Exception as e:
         logger.warning(f"AgentRegistry Redis connect failed (running degraded): {e}")
     
@@ -106,6 +109,12 @@ async def _lifespan(app: FastAPI):
     
     # 清理
     logger.info("🐝 Agent Swarm shutting down...")
+    if _sweep_task:
+        _sweep_task.cancel()
+        try:
+            await _sweep_task
+        except asyncio.CancelledError:
+            pass
     if registry:
         try:
             await registry.close()
