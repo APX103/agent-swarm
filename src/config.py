@@ -81,6 +81,7 @@ class Settings:
     redis: RedisConfig = field(default_factory=RedisConfig)
     agent_cards: list[AgentCardDef] = field(default_factory=list)
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
+    api_key: str = ""  # if set, /api/v1/ routes require X-API-Key header
     dispatcher: dict = field(default_factory=lambda: {
         "max_retries": 2, "dispatch_timeout": 300.0, "max_concurrent": 8, "health_precheck": True,
     })
@@ -147,6 +148,10 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
             "max_concurrent": int(d.get("max_concurrent", 8)),
             "health_precheck": bool(d.get("health_precheck", True)),
         }
+
+    # API key (optional, for /api/v1/ protection)
+    if os.environ.get("SWARM_API_KEY"):
+        settings.api_key = os.environ["SWARM_API_KEY"]
 
     # Environment overrides for orchestrator selection.
     if os.environ.get("ORCHESTRATOR_PROVIDER"):

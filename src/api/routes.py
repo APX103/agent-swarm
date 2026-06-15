@@ -282,6 +282,17 @@ async def list_dead_letters(limit: int = Query(50)):
     ]
 
 
+@router.get("/api/sessions/{session_id}/events")
+async def get_session_events(session_id: str):
+    """Get structured state + event log for a session (audit trail)."""
+    if _session_service is None:
+        raise HTTPException(503, "SessionService not available")
+    sess = _session_service.get_session(session_id)
+    if sess is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return {"session_id": session_id, "events": sess.events, "state": sess.state}
+
+
 @router.get("/api/v1/metrics")
 async def get_metrics_endpoint():
     """Dispatch metrics snapshot (counters, latency, failure rate)."""

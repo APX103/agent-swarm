@@ -169,6 +169,16 @@ def create_app(lifespan=None) -> FastAPI:
     app.include_router(router)
     app.include_router(gateway.router)
     
+    # API Key 保护 /api/v1/ 路由（内网防误调用）
+    if settings.api_key:
+        @app.middleware("http")
+        async def api_key_guard(request, call_next):
+            if request.url.path.startswith("/api/v1/"):
+                if request.headers.get("X-API-Key") != settings.api_key:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(status_code=401, content={"detail": "Invalid or missing API key"})
+            return await call_next(request)
+
     return app
 
 

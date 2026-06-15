@@ -96,7 +96,7 @@ class Dispatcher:
         start = time.monotonic()
         result = await self._do_dispatch(request)
         if self._metrics:
-            self._metrics.record_dispatch(result.success, (time.monotonic() - start) * 1000)
+            self._metrics.record_dispatch(result.success, (time.monotonic() - start) * 1000, request.agent_type)
         return result
 
     async def _do_dispatch(self, request: DispatchRequest) -> DispatchResult:
