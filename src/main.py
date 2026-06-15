@@ -51,7 +51,7 @@ async def _lifespan(app: FastAPI):
 
     # 1. 初始化持久化 + 任务管理器
     from src.storage.sqlite_store import SQLiteStore
-    store = SQLiteStore(Path(settings.storage.shared_output_base) / "swarm.db")
+    store = SQLiteStore(settings.storage.shared_output_base + "/swarm.db")
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
         store=store,
