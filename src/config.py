@@ -81,6 +81,9 @@ class Settings:
     redis: RedisConfig = field(default_factory=RedisConfig)
     agent_cards: list[AgentCardDef] = field(default_factory=list)
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
+    dispatcher: dict = field(default_factory=lambda: {
+        "max_retries": 2, "dispatch_timeout": 300.0, "max_concurrent": 8, "health_precheck": True,
+    })
 
 
 def load_settings(config_path: Optional[str] = None) -> Settings:
@@ -135,6 +138,15 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
             external_timeout=float(o.get("external_timeout", 600.0)),
             fallback=bool(o.get("fallback", True)),
         )
+
+    if "dispatcher" in data:
+        d = data["dispatcher"]
+        settings.dispatcher = {
+            "max_retries": int(d.get("max_retries", 2)),
+            "dispatch_timeout": float(d.get("dispatch_timeout", 300.0)),
+            "max_concurrent": int(d.get("max_concurrent", 8)),
+            "health_precheck": bool(d.get("health_precheck", True)),
+        }
 
     # Environment overrides for orchestrator selection.
     if os.environ.get("ORCHESTRATOR_PROVIDER"):

@@ -86,6 +86,7 @@ async def _lifespan(app: FastAPI):
         logger.warning("Will operate without real Docker containers")
     
     # 5. 初始化统一 Dispatcher（Docker 容器 + 外部注册 Agent 同为候选）
+    dcfg = settings.dispatcher
     dispatcher = Dispatcher(
         [
             DockerBackend(
@@ -97,7 +98,12 @@ async def _lifespan(app: FastAPI):
             ),
             ExternalAgentBackend(registry=registry, adapter_manager=adapter_manager),
         ],
-        DispatcherConfig(),
+        DispatcherConfig(
+            max_retries=dcfg["max_retries"],
+            dispatch_timeout=dcfg["dispatch_timeout"],
+            max_concurrent=dcfg["max_concurrent"],
+            health_precheck=dcfg["health_precheck"],
+        ),
         result_cache=ResultCache(),
     )
 

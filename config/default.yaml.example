@@ -71,3 +71,10 @@ orchestrator:
   external_endpoint: ""          # 外部调度 Agent 的 A2A URL（provider=external 时必填）
   external_timeout: 600
   fallback: true                 # 外部不可用时自动回退内置（日志 + 事件显式标注，不静默吞错）
+
+# 调度器配置
+dispatcher:
+  max_retries: 2                 # 失败重试次数（切候选 Agent）
+  dispatch_timeout: 300          # 单次 dispatch 超时（秒）
+  max_concurrent: 8              # 全局并发上限（背压）
+  health_precheck: true          # dispatch 前健康预检

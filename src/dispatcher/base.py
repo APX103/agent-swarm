@@ -39,7 +39,6 @@ class DispatchRequest:
     agent_type: str
     task: str
     context: dict = field(default_factory=dict)
-    shared_context: str = ""
     timeout: Optional[float] = None
     # Optional async progress callback (streaming). When set, streaming-capable
     # backends send non-blocking and forward worker snapshots here.

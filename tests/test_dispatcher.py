@@ -31,7 +31,6 @@ def test_dispatch_request_defaults():
     r = DispatchRequest(agent_type="backend-engineer", task="build api")
     assert r.task == "build api"
     assert r.context == {}
-    assert r.shared_context == ""
     assert r.timeout is None
 
 
