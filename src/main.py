@@ -82,7 +82,7 @@ async def _lifespan(app: FastAPI):
     logger.info("AdapterManager initialized")
 
     # 3b. 声明式 Agent 注册 (agents/*.yaml)
-    _agents_dir = BASE_DIR / "agents"
+    _agents_dir = Path(__file__).resolve().parent.parent / "agents"
     if _agents_dir.exists():
         import yaml as _yaml
         from src.adapters.adapter_manager import create_adapter as _create_adapter
