@@ -181,6 +181,16 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
             pass
     if os.environ.get("CONTAINER_IMAGE_NAME"):
         settings.container_pool.image_name = os.environ["CONTAINER_IMAGE_NAME"]
+    if os.environ.get("CONTAINER_POOL_SIZE"):
+        try:
+            settings.container_pool.pool_size = int(os.environ["CONTAINER_POOL_SIZE"])
+        except ValueError:
+            pass
+    if os.environ.get("CONTAINER_BASE_PORT"):
+        try:
+            settings.container_pool.base_port = int(os.environ["CONTAINER_BASE_PORT"])
+        except ValueError:
+            pass
     if os.environ.get("WORKER_DEV_MODE", "").lower() in ("true", "1", "yes"):
         settings.container_pool.worker_dev_mode = True
     if os.environ.get("CONTAINER_WORKER_HOST"):
