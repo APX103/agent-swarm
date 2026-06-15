@@ -209,7 +209,7 @@ async def test_orchestrator_uses_injected_dispatcher(mock_settings, mock_pool, m
     from src.dispatcher.base import DispatchAttempt, DispatchTarget
 
     class FakeExternalBackend:
-        async def candidates(self, agent_type):
+        async def candidates(self, agent_type, agent_id=None):
             return [DispatchTarget(kind="external", agent_type=agent_type, agent_id="ext1")]
 
         async def invoke(self, target, request):

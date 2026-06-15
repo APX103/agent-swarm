@@ -1,0 +1,6 @@
+name: Mobile Engineer
+endpoint: http://localhost:9008
+protocol: a2a
+skills:
+- mobile-engineer
+description: 移动端工程师，擅长 React Native/Flutter、iOS/Android 适配

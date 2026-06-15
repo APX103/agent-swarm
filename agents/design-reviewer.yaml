@@ -1,0 +1,6 @@
+name: Design Reviewer
+endpoint: http://localhost:9010
+protocol: a2a
+skills:
+- design-reviewer
+description: 设计评审专家，擅长 UI/UX 审查、可用性与视觉一致性评估

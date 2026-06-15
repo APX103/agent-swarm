@@ -107,8 +107,8 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
 
     # SessionService: 结构化 state + events（与 SessionManager 并存）
     if _session_service and sess:
-        _session_service.get_or_create_with_id(sess.session_id, tenant)
-        _session_service.append_event(sess.session_id, {"type": "user_message", "text": req.message})
+        await _session_service.get_or_create_with_id(sess.session_id, tenant)
+        await _session_service.append_event(sess.session_id, {"type": "user_message", "text": req.message})
 
     # 创建任务
     task = await task_manager.create_task(
@@ -119,6 +119,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
     # session: 覆盖 work_dir 到 session 目录（同一 session 多轮产出落同一处）
     if sess:
         task.work_dir = sess.work_dir
+        task.session_id = sess.session_id
 
     if idempotency_key:
         _idempotency_index[idempotency_key] = task.task_id
@@ -240,6 +241,29 @@ async def download_artifacts(task_id: str):
     )
 
 
+@router.get("/api/tasks/{task_id}/artifacts/{file_path:path}")
+async def read_artifact(task_id: str, file_path: str):
+    """读取单个产物文件内容（供前端预览）。
+
+    路径相对 task work_dir。返回原始文本；HTML 文件可由前端 iframe 渲染。
+    """
+    task = task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if not task.work_dir:
+        raise HTTPException(404, "Task has no work directory")
+    full = (task.work_dir / file_path).resolve()
+    # 防路径穿越：必须落在 work_dir 内
+    try:
+        full.relative_to(task.work_dir.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid file path")
+    if not full.exists() or not full.is_file():
+        raise HTTPException(404, f"File not found: {file_path}")
+    content = full.read_text(encoding="utf-8", errors="replace")
+    return {"name": file_path, "content": content, "size": full.stat().st_size}
+
+
 @router.get("/api/agents", response_model=list[AgentInfo])
 async def list_agents():
     """列出可用 Agent 类型"""
@@ -287,7 +311,7 @@ async def get_session_events(session_id: str):
     """Get structured state + event log for a session (audit trail)."""
     if _session_service is None:
         raise HTTPException(503, "SessionService not available")
-    sess = _session_service.get_session(session_id)
+    sess = await _session_service.get_session(session_id)
     if sess is None:
         raise HTTPException(404, f"Session {session_id} not found")
     return {"session_id": session_id, "events": sess.events, "state": sess.state}
@@ -320,6 +344,20 @@ async def task_websocket(websocket: WebSocket, task_id: str):
             if data.get("action") == "cancel":
                 cancel_running(task_id)
                 await task_manager.update_status(task_id, TaskStatus.CANCELLED)
+                # 显式 emit cancel 事件：WS 广播 + session 事件流
+                cancel_event = {
+                    "type": "cancelled",
+                    "task_id": task_id,
+                    "data": {"reason": "client_requested"},
+                }
+                await ws_manager.broadcast(task_id, cancel_event)
+                t = task_manager.get_task(task_id)
+                sid = getattr(t, "session_id", None) if t else None
+                if _session_service and sid:
+                    try:
+                        await _session_service.append_event(sid, {"type": "cancelled", "task_id": task_id})
+                    except Exception:
+                        logger.warning("Failed to append cancel event to session %s", sid, exc_info=True)
                 break
     except WebSocketDisconnect:
         pass

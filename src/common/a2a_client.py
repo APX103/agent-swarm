@@ -34,6 +34,7 @@ class A2ATask:
     state: str
     message: Optional[str] = None
     artifacts: list[dict] = field(default_factory=list)
+    progress: list[dict] = field(default_factory=list)  # worker 写入的逐步进度事件
 
 
 class A2AClient:
@@ -108,6 +109,7 @@ class A2AClient:
                 state=data.get("status", {}).get("state", "unknown"),
                 message=self._extract_text(data),
                 artifacts=data.get("artifacts", []),
+                progress=data.get("progress", []),
             )
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
@@ -140,6 +142,7 @@ class A2AClient:
                 state=data.get("status", {}).get("state", "unknown"),
                 message=self._extract_text(data),
                 artifacts=data.get("artifacts", []),
+                progress=data.get("progress", []),
             )
         except Exception as e:
             logger.error(f"Failed to get task: {e}")
@@ -153,8 +156,8 @@ class A2AClient:
     ) -> AsyncIterator[A2ATask]:
         """Poll ``tasks/get`` and yield task snapshots as they change.
 
-        Yields when the task's state or message changes. Stops at a terminal
-        state (completed/failed/canceled) or when *timeout* elapses.
+        Yields when the task's state, message, or progress length changes. Stops
+        at a terminal state (completed/failed/canceled) or when *timeout* elapses.
         """
         deadline = time.monotonic() + timeout
         last_key: Optional[tuple] = None
@@ -164,7 +167,7 @@ class A2AClient:
                 return
             task = await self.get_task(task_id)
             if task is not None:
-                key = (task.state, task.message)
+                key = (task.state, task.message, len(task.progress))
                 if key != last_key:
                     last_key = key
                     yield task

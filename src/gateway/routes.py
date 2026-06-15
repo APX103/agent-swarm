@@ -1,11 +1,16 @@
 """Gateway API routes for external agent registration."""
+import asyncio
 import logging
+import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from src.adapters.adapter_manager import create_adapter
+from src.api.models import TaskStatus
+from src.api.websocket import ws_manager
+from src.dispatcher.base import DispatchRequest
 from src.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
@@ -15,6 +20,12 @@ router = APIRouter(prefix="/api/v1/agents")
 # Module-level dependencies, set during app lifespan
 _registry = None
 _adapter_manager = None
+
+# Optional deps for the enriched direct-chat path (set from main.py). When absent,
+# /invoke falls back to the original thin adapter.invoke (no session/task/streaming).
+_task_manager = None
+_session_manager = None
+_dispatcher = None
 
 # Default heartbeat interval (seconds) advertised to agents. The real
 # AgentRegistry does not store a per-agent interval, so the gateway surfaces
@@ -34,11 +45,19 @@ def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
     return cb
 
 
-def set_deps(registry, adapter_manager):
-    """Set gateway dependencies (called from main.py lifespan)."""
-    global _registry, _adapter_manager
+def set_deps(registry, adapter_manager, task_manager=None, session_manager=None, dispatcher=None):
+    """Set gateway dependencies (called from main.py lifespan).
+
+    The last three are optional and enable the enriched direct-chat path on
+    POST /{agent_id}/invoke (session + streaming + task tracking). When omitted,
+    /invoke keeps its original thin behavior.
+    """
+    global _registry, _adapter_manager, _task_manager, _session_manager, _dispatcher
     _registry = registry
     _adapter_manager = adapter_manager
+    _task_manager = task_manager
+    _session_manager = session_manager
+    _dispatcher = dispatcher
     _invoke_breakers.clear()  # reset breaker state on (re)wiring
 
 
@@ -57,6 +76,10 @@ class AgentRegistration(BaseModel):
 class InvokeRequest(BaseModel):
     task: str
     context: dict[str, Any] = {}
+    # When set, the invoke runs as a tracked task in this session (direct-chat):
+    # session work folder is reused, progress streams over WebSocket, and the
+    # response is a TaskResponse (same shape as /api/chat) instead of AgentResult.
+    session_id: Optional[str] = None
 
 
 class RegistrationResponse(BaseModel):
@@ -221,9 +244,18 @@ async def list_agents(skill: Optional[str] = Query(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{agent_id}/invoke", response_model=AgentResult)
+@router.post("/{agent_id}/invoke")
 async def invoke_agent(agent_id: str, body: InvokeRequest):
-    """Invoke a registered agent with a task (guarded by a per-agent circuit breaker)."""
+    """Invoke a registered agent with a task.
+
+    Two modes:
+    - **Direct-chat** (body.session_id present): runs as a tracked task inside
+      the session — reuses the session work folder, streams progress over
+      WebSocket (ws/tasks/{task_id}), and returns a TaskResponse-shaped dict
+      (same as /api/chat). Requires the optional deps wired via set_deps.
+    - **Thin invoke** (no session_id): the original behavior — calls the adapter
+      directly through a per-agent circuit breaker, returns AgentResult.
+    """
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
     if _adapter_manager is None:
@@ -232,6 +264,10 @@ async def invoke_agent(agent_id: str, body: InvokeRequest):
     if adapter is None:
         raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
 
+    if body.session_id is not None:
+        return await _invoke_direct_chat(agent_id, body)
+
+    # ── thin invoke (original path) ─────────────────────────────────────────
     breaker = _get_invoke_breaker(agent_id)
     try:
         result = await breaker.call(adapter.invoke, body.task, body.context)
@@ -250,3 +286,79 @@ async def invoke_agent(agent_id: str, body: InvokeRequest):
         result=result.output,
         error=result.error,
     )
+
+
+async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
+    """Enriched direct-chat: tracked task + session + streaming + dispatcher routing.
+
+    Resolves the agent's skill (agent_type) from the registry so the Dispatcher
+    can route by id directly, and forwards progress to the WebSocket.
+    """
+    if _task_manager is None or _session_manager is None or _dispatcher is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Direct-chat not available (task_manager/session_manager/dispatcher not wired)",
+        )
+
+    # resolve agent record (need its skill as agent_type + existence check)
+    try:
+        agent = await _registry.get_agent(agent_id)
+    except Exception:
+        logger.exception("get_agent failed for direct-chat %s", agent_id)
+        raise HTTPException(status_code=500, detail="Registry lookup failed")
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    agent_type = (agent.get("skills") or [None])[0] or agent.get("name") or agent_id
+
+    # session: reuse work folder + (future) history
+    sess = _session_manager.get_or_create(body.session_id, tenant_id="default")
+
+    # tracked task
+    task = await _task_manager.create_task(user_message=body.task, tenant_id="default")
+    task.work_dir = sess.work_dir
+
+    async def on_event(event: dict):
+        await ws_manager.broadcast(task.task_id, event)
+
+    task.subscribe(on_event)
+    await _task_manager.update_status(task.task_id, TaskStatus.RUNNING)
+
+    # forward worker progress snapshots to the WS as agent_progress events
+    async def on_progress(snap: dict):
+        await ws_manager.broadcast(
+            task.task_id,
+            {"type": "agent_progress", "task_id": task.task_id, "agent": agent_id, "data": snap},
+        )
+
+    ctx = {"task_id": task.task_id, "tenant_id": "default", "shared_dir": str(sess.work_dir)}
+    request = DispatchRequest(
+        agent_type=agent_type,
+        task=body.task,
+        context=ctx,
+        on_progress=on_progress,
+        agent_id=agent_id,  # direct selection — bypass skill matching
+    )
+
+    async def run_direct():
+        try:
+            result = await _dispatcher.dispatch(request)
+            _session_manager.save(sess)
+            if result.success:
+                await _task_manager.complete_task(task.task_id, result.output or "")
+            else:
+                await _task_manager.fail_task(task.task_id, result.error or "direct-chat failed")
+        except Exception as e:
+            logger.error("Direct-chat dispatch failed: %s", e, exc_info=True)
+            _session_manager.save(sess)
+            await _task_manager.fail_task(task.task_id, str(e))
+
+    asyncio.create_task(run_direct())
+
+    return {
+        "task_id": task.task_id,
+        "status": TaskStatus.RUNNING.value,
+        "message": "Direct-chat task created, streaming over WebSocket.",
+        "artifacts": [],
+        "session_id": sess.session_id,
+        "agent_id": agent_id,
+    }

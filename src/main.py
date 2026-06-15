@@ -79,7 +79,10 @@ async def _lifespan(app: FastAPI):
     
     # 3. 初始化适配器管理器
     adapter_manager = AdapterManager()
-    gateway.set_deps(registry, adapter_manager)
+    gateway.set_deps(
+        registry, adapter_manager,
+        task_manager=None,  # filled after task_manager is created (see below)
+    )
     logger.info("AdapterManager initialized")
 
     # 3b. 声明式 Agent 注册 (agents/*.yaml)
@@ -149,6 +152,13 @@ async def _lifespan(app: FastAPI):
     session_mgr = SessionManager(settings.storage.shared_output_base, store=store)
     resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
     set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr, session_svc=session_svc)
+
+    # 8. 把直聊增强所需的依赖回填到 gateway（task_manager/session/dispatcher 在 3 之后才就绪）
+    gateway.set_deps(
+        registry, adapter_manager,
+        task_manager=task_manager, session_manager=session_mgr, dispatcher=dispatcher,
+    )
+    logger.info("Gateway direct-chat deps wired")
     
     logger.info("🐝 Agent Swarm ready!")
     
@@ -191,6 +201,13 @@ def create_app(lifespan=None) -> FastAPI:
     
     app.include_router(router)
     app.include_router(gateway.router)
+
+    # 挂载前端静态文件（web/ 目录，方便单机 demo 直接访问 /ui）。
+    # 前端也可独立部署到任意位置——CORS 已开 *，配置好后端 endpoint 即可。
+    _web_dir = Path(__file__).parent.parent / "web"
+    if _web_dir.exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
     
     # API Key 保护 /api/v1/ 路由（内网防误调用）
     if settings.api_key:

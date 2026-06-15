@@ -43,6 +43,9 @@ class DispatchRequest:
     # Optional async progress callback (streaming). When set, streaming-capable
     # backends send non-blocking and forward worker snapshots here.
     on_progress: Optional[Callable[[dict], Awaitable[None]]] = None
+    # Optional: when set, backends that support direct selection route to this
+    # specific agent_id instead of doing skill-based matching (used by direct-chat).
+    agent_id: Optional[str] = None
 
 
 @dataclass

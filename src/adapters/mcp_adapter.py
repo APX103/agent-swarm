@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 import httpx
 
-from .base import AgentBackend, AgentCapabilities, AgentResult
+from .base import AgentBackend, AgentCapabilities, AgentResult, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +62,14 @@ class MCPAdapter(AgentBackend):
             output_modes=["text", "json"],
         )
 
-    async def invoke(self, task: str, context: dict = None) -> AgentResult:
-        """Send a tools/call JSON-RPC request to the MCP server."""
+    async def invoke(
+        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+    ) -> AgentResult:
+        """Send a tools/call JSON-RPC request to the MCP server.
+
+        MCP tool calls are request/response; *on_progress* is accepted for
+        interface compatibility but ignored.
+        """
         client = await self._get_client()
 
         tool_name = (context or {}).get("tool_name", "default")

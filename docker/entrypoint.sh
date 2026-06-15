@@ -33,7 +33,7 @@ if [ -s "$CONFIG_FILE" ]; then
     export AGENT_SYSTEM_PROMPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('system_prompt', ''))" 2>/dev/null || echo "")
 fi
 
-echo "[Worker] Starting Agent: role=$AGENT_ROLE, model=$LLM_MODEL, port=$AGENT_PORT"
+echo "[Worker] Starting Agent: role=$AGENT_ROLE, model=$LLM_MODEL, port=$AGENT_PORT, shared_dir=$SHARED_DIR"
 
 # 启动 Worker Agent Server
 exec python3 -u /app/agents/worker.py \
@@ -42,4 +42,5 @@ exec python3 -u /app/agents/worker.py \
     --base-url "$LLM_BASE_URL" \
     --api-key "$LLM_API_KEY" \
     --port "$AGENT_PORT" \
-    --task-id "$TASK_ID"
+    --task-id "$TASK_ID" \
+    --shared-dir "$SHARED_DIR"

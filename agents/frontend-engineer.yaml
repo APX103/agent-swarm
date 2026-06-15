@@ -1,0 +1,6 @@
+name: Frontend Engineer
+endpoint: http://localhost:9001
+protocol: a2a
+skills:
+- frontend-engineer
+description: 专业前端工程师，擅长 React/Vue/TypeScript、响应式 UI、组件化与无障碍设计

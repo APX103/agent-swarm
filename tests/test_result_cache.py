@@ -51,7 +51,7 @@ class _Backend:
         self._targets = targets
         self._invoke = invoke_fn
 
-    async def candidates(self, agent_type):
+    async def candidates(self, agent_type, agent_id=None):
         return list(self._targets)
 
     async def invoke(self, target, request):

@@ -1,0 +1,6 @@
+name: DevOps Engineer
+endpoint: http://localhost:9004
+protocol: a2a
+skills:
+- devops-engineer
+description: DevOps 工程师，擅长 Docker/K8s、CI/CD 流水线、部署与监控

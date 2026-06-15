@@ -4,7 +4,7 @@ import logging
 import shutil
 from typing import Optional
 
-from .base import AgentBackend, AgentCapabilities, AgentResult
+from .base import AgentBackend, AgentCapabilities, AgentResult, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,14 @@ class CLIAdapter(AgentBackend):
             output_modes=["text", "json"],
         )
 
-    async def invoke(self, task: str, context: dict = None) -> AgentResult:
-        """Spawn a subprocess, pipe the task to stdin, and capture stdout."""
+    async def invoke(
+        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+    ) -> AgentResult:
+        """Spawn a subprocess, pipe the task to stdin, and capture stdout.
+
+        CLI agents are request/response by nature; *on_progress* is accepted
+        for interface compatibility but ignored.
+        """
         cmd = [self.command] + self.args
         logger.info("Invoking CLI agent: %s", " ".join(cmd))
 

@@ -1,0 +1,6 @@
+name: QA Engineer
+endpoint: http://localhost:9005
+protocol: a2a
+skills:
+- qa-engineer
+description: 测试工程师，擅长单元/集成/E2E 测试、缺陷分析与质量保障

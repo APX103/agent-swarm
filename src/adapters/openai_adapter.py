@@ -3,7 +3,7 @@ from typing import Optional
 
 import httpx
 
-from .base import AgentBackend, AgentCapabilities, AgentResult
+from .base import AgentBackend, AgentCapabilities, AgentResult, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,14 @@ class OpenAIAdapter(AgentBackend):
             output_modes=["text"],
         )
 
-    async def invoke(self, task: str, context: dict = None) -> AgentResult:
-        """Send a chat completion request to the OpenAI-compatible API."""
+    async def invoke(
+        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+    ) -> AgentResult:
+        """Send a chat completion request to the OpenAI-compatible API.
+
+        OpenAI chat completions are request/response; *on_progress* is accepted
+        for interface compatibility but ignored.
+        """
         client = await self._get_client()
         system_msg = context.get("system_prompt", "You are a helpful assistant.") if context else "You are a helpful assistant."
 

@@ -495,7 +495,7 @@ class Orchestrator:
 
         # SessionService: 写结构化 state + event
         if self._session_service and self._current_svc_session_id:
-            self._session_service.update_state(self._current_svc_session_id, {
+            await self._session_service.update_state(self._current_svc_session_id, {
                 "plan": {
                     "analysis": analysis[:500],
                     "api_contract": api_contract[:2000],
@@ -506,7 +506,7 @@ class Orchestrator:
                     ],
                 }
             })
-            self._session_service.append_event(self._current_svc_session_id, {
+            await self._session_service.append_event(self._current_svc_session_id, {
                 "type": "plan_created",
                 "subtask_count": len(subtasks),
             })
@@ -559,12 +559,12 @@ class Orchestrator:
 
         # SessionService: append dispatch + completion events
         if self._session_service and self._current_svc_session_id:
-            self._session_service.append_event(self._current_svc_session_id, {
+            await self._session_service.append_event(self._current_svc_session_id, {
                 "type": "agent_dispatched",
                 "agent_type": agent_type,
                 "dispatch_id": dispatch_id,
             })
-            self._session_service.append_event(self._current_svc_session_id, {
+            await self._session_service.append_event(self._current_svc_session_id, {
                 "type": "agent_completed",
                 "agent_type": agent_type,
                 "dispatch_id": dispatch_id,
@@ -573,7 +573,7 @@ class Orchestrator:
                 "error": (result.error or "")[:200],
             })
             if result.success and result.artifacts:
-                self._session_service.update_state(self._current_svc_session_id, {
+                await self._session_service.update_state(self._current_svc_session_id, {
                     "artifacts": {agent_type.split("-")[0]: result.artifacts}
                 })
 
@@ -731,7 +731,7 @@ class Orchestrator:
 
         # SessionService: append finalized event
         if self._session_service and self._current_svc_session_id:
-            self._session_service.append_event(self._current_svc_session_id, {
+            await self._session_service.append_event(self._current_svc_session_id, {
                 "type": "finalized",
                 "summary": summary[:500],
             })

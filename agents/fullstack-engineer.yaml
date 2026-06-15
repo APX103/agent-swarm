@@ -1,0 +1,6 @@
+name: Fullstack Engineer
+endpoint: http://localhost:9003
+protocol: a2a
+skills:
+- fullstack-engineer
+description: 全栈工程师，能独立打通前后端、从数据库到 UI 端到端交付

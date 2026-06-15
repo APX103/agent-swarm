@@ -36,7 +36,7 @@ class FakeBackend:
         self._health_fn = health_fn or (lambda t: True)
         self.invoke_calls = 0
 
-    async def candidates(self, agent_type):
+    async def candidates(self, agent_type, agent_id=None):
         return list(self._targets)
 
     async def invoke(self, target, request):

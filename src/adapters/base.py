@@ -1,9 +1,13 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Any, Optional
+from typing import AsyncIterator, Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# Progress callback shape: receives a dict snapshot mid-invoke. Optional across
+# all backends; only streaming-capable ones (a2a) act on it.
+ProgressCallback = Callable[[dict], Awaitable[None]]
 
 
 @dataclass
@@ -24,7 +28,9 @@ class AgentCapabilities:
 
 class AgentBackend(ABC):
     @abstractmethod
-    async def invoke(self, task: str, context: dict = None) -> AgentResult: ...
+    async def invoke(
+        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+    ) -> AgentResult: ...
 
     @abstractmethod
     async def health_check(self) -> bool: ...

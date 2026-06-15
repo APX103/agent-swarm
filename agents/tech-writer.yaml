@@ -1,0 +1,6 @@
+name: Technical Writer
+endpoint: http://localhost:9009
+protocol: a2a
+skills:
+- tech-writer
+description: 技术文档工程师，擅长 README/API 文档、架构说明与用户指南

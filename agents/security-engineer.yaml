@@ -1,0 +1,6 @@
+name: Security Engineer
+endpoint: http://localhost:9006
+protocol: a2a
+skills:
+- security-engineer
+description: 安全工程师，擅长漏洞评估、输入校验、鉴权与安全编码审查

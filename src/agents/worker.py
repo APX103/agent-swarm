@@ -555,7 +555,7 @@ def execute_file_tool(name: str, args: dict) -> str:
 def main():
     """命令行入口"""
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Worker Agent")
     parser.add_argument("--role", default="general")
     parser.add_argument("--model", default="glm-coding-plan")
@@ -563,19 +563,23 @@ def main():
     parser.add_argument("--api-key", default="")
     parser.add_argument("--port", type=int, default=9001)
     parser.add_argument("--task-id", default="")
+    parser.add_argument("--shared-dir", default="", help="共享产物目录（容器内路径）；不传则用 SHARED_DIR 环境变量或默认值")
     args = parser.parse_args()
-    
+
     # 设置全局变量
-    global AGENT_ROLE, LLM_MODEL, LLM_BASE_URL, LLM_API_KEY, AGENT_PORT, TASK_ID
+    global AGENT_ROLE, LLM_MODEL, LLM_BASE_URL, LLM_API_KEY, AGENT_PORT, TASK_ID, SHARED_DIR
     AGENT_ROLE = args.role
     LLM_MODEL = args.model
     LLM_BASE_URL = args.base_url
     LLM_API_KEY = args.api_key
     AGENT_PORT = args.port
     TASK_ID = args.task_id
-    
+    if args.shared_dir:
+        SHARED_DIR = args.shared_dir
+        os.environ["SHARED_DIR"] = args.shared_dir  # 让 execute_file_tool 读到最新值
+
     import uvicorn
-    logger.info(f"Starting Worker Agent: role={AGENT_ROLE}, port={AGENT_PORT}")
+    logger.info(f"Starting Worker Agent: role={AGENT_ROLE}, port={AGENT_PORT}, shared_dir={SHARED_DIR}")
     uvicorn.run(app, host="0.0.0.0", port=AGENT_PORT)
 
 

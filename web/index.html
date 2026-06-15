@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🐝 Agent Swarm</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 左侧：Agent 名册 -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>🐝 Swarm</h1>
+        <span class="subtitle">Agent 控制台</span>
+      </div>
+      <div class="mode-toggle">
+        <button id="mode-copilot" class="mode-btn active" title="和编排器对话，自动拆解并分派多个 Agent">🧭 Copilot</button>
+        <button id="mode-direct" class="mode-btn" title="和单个 Agent 1:1 直聊" disabled>💬 直聊</button>
+      </div>
+      <div class="agent-roster" id="agent-roster">
+        <div class="roster-hint">Copilot 模式：编排器自动调度</div>
+      </div>
+      <div class="sidebar-footer">
+        <label class="config-label">后端地址
+          <input id="backend-url" type="text" value="" placeholder="http://localhost:9000" />
+        </label>
+        <button id="connect-btn" class="connect-btn">连接</button>
+        <span id="conn-status" class="conn-status disconnected">● 未连接</span>
+      </div>
+    </aside>
+
+    <!-- 中间：对话区 -->
+    <main class="chat-area">
+      <div class="chat-header">
+        <span id="chat-title">🧭 Copilot 模式</span>
+        <div class="session-info">
+          <span>session: <code id="session-id">（新建）</code></span>
+          <button id="new-session-btn" class="text-btn" title="开新会话">＋新会话</button>
+        </div>
+      </div>
+      <div class="messages" id="messages">
+        <div class="empty-state">
+          <div class="bee">🐝</div>
+          <p>发送消息开始任务。</p>
+          <p class="muted">Copilot 会自动拆解、分派 Agent；或切到「直聊」选一个 Agent 1:1 对话。</p>
+        </div>
+      </div>
+      <div class="progress-bar" id="progress-bar" hidden>
+        <div class="spinner"></div>
+        <span id="progress-text">执行中…</span>
+        <button id="cancel-btn" class="cancel-btn">取消</button>
+      </div>
+      <form class="input-bar" id="chat-form">
+        <textarea id="chat-input" placeholder="描述你的任务…（Shift+Enter 换行）" rows="1"></textarea>
+        <button type="submit" id="send-btn">发送</button>
+      </form>
+    </main>
+
+    <!-- 右侧：产物面板 -->
+    <aside class="artifacts-panel">
+      <div class="artifacts-header">
+        <h2>📦 产物</h2>
+        <button id="refresh-artifacts" class="text-btn" title="刷新">↻</button>
+      </div>
+      <div class="task-meta" id="task-meta"></div>
+      <div class="artifacts-list" id="artifacts-list">
+        <div class="empty-hint">执行任务后这里会显示产物文件。</div>
+      </div>
+      <div class="artifact-preview" id="artifact-preview" hidden>
+        <div class="preview-header">
+          <span id="preview-name"></span>
+          <button id="close-preview" class="text-btn">✕</button>
+        </div>
+        <iframe id="preview-frame" sandbox="allow-same-origin"></iframe>
+      </div>
+    </aside>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

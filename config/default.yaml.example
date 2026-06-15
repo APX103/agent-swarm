@@ -34,27 +34,95 @@ timeouts:
 
 # Agent Card 预定义
 agent_cards:
-  - id: "frontend-ux-pro"
-    name: "Frontend UX Pro"
-    description: "专业前端开发 Agent，擅长 UI/UX 设计和 React/Vue/HTML+CSS+JS 实现"
+  - id: "frontend-engineer"
+    name: "Frontend Engineer"
+    description: "专业前端工程师，擅长 React/Vue/TypeScript、响应式 UI、组件化与无障碍设计"
     skills:
-      - id: "frontend-dev"
+      - id: "frontend-engineer"
         name: "Frontend Development"
         description: "开发响应式前端应用"
-        tags: ["frontend", "react", "vue", "ui", "ux", "css", "html", "javascript"]
-      - id: "ui-review"
-        name: "UI/UX Review"
-        description: "审查 UI 设计并提供改进建议"
-        tags: ["design", "review", "accessibility"]
+        tags: ["frontend", "react", "vue", "typescript", "ui", "css", "html"]
 
   - id: "backend-engineer"
     name: "Backend Engineer"
-    description: "专业后端开发 Agent，擅长 API 设计、数据库操作和服务端逻辑"
+    description: "专业后端工程师，擅长 API 设计、数据库建模、Python/FastAPI/Node.js 服务端"
     skills:
-      - id: "backend-dev"
+      - id: "backend-engineer"
         name: "Backend Development"
         description: "开发 RESTful API、数据库设计、服务端逻辑"
-        tags: ["backend", "api", "database", "python", "node", "fastapi", "express"]
+        tags: ["backend", "api", "database", "python", "node", "fastapi"]
+
+  - id: "fullstack-engineer"
+    name: "Fullstack Engineer"
+    description: "全栈工程师，能独立打通前后端、从数据库到 UI 端到端交付"
+    skills:
+      - id: "fullstack-engineer"
+        name: "Fullstack Development"
+        description: "端到端全栈开发"
+        tags: ["fullstack", "frontend", "backend"]
+
+  - id: "devops-engineer"
+    name: "DevOps Engineer"
+    description: "DevOps 工程师，擅长 Docker/K8s、CI/CD 流水线、部署与监控"
+    skills:
+      - id: "devops-engineer"
+        name: "DevOps"
+        description: "容器化、CI/CD、部署、监控"
+        tags: ["devops", "docker", "kubernetes", "ci-cd"]
+
+  - id: "qa-engineer"
+    name: "QA Engineer"
+    description: "测试工程师，擅长单元/集成/E2E 测试、缺陷分析与质量保障"
+    skills:
+      - id: "qa-engineer"
+        name: "Quality Assurance"
+        description: "测试编写、缺陷分析、质量保障"
+        tags: ["qa", "testing", "unit-test", "e2e"]
+
+  - id: "security-engineer"
+    name: "Security Engineer"
+    description: "安全工程师，擅长漏洞评估、输入校验、鉴权与安全编码审查"
+    skills:
+      - id: "security-engineer"
+        name: "Security"
+        description: "漏洞评估、鉴权、安全编码审查"
+        tags: ["security", "auth", "vulnerability"]
+
+  - id: "data-engineer"
+    name: "Data Engineer"
+    description: "数据工程师，擅长数据管道、ETL、SQL 与数据分析脚本"
+    skills:
+      - id: "data-engineer"
+        name: "Data Engineering"
+        description: "数据管道、ETL、数据分析"
+        tags: ["data", "etl", "sql", "analytics"]
+
+  - id: "mobile-engineer"
+    name: "Mobile Engineer"
+    description: "移动端工程师，擅长 React Native/Flutter、iOS/Android 适配"
+    skills:
+      - id: "mobile-engineer"
+        name: "Mobile Development"
+        description: "移动端应用开发"
+        tags: ["mobile", "react-native", "flutter", "ios", "android"]
+
+  - id: "tech-writer"
+    name: "Technical Writer"
+    description: "技术文档工程师，擅长 README/API 文档、架构说明与用户指南"
+    skills:
+      - id: "tech-writer"
+        name: "Technical Writing"
+        description: "技术文档、API 文档、用户指南"
+        tags: ["docs", "writing", "readme"]
+
+  - id: "design-reviewer"
+    name: "Design Reviewer"
+    description: "设计评审专家，擅长 UI/UX 审查、可用性与视觉一致性评估"
+    skills:
+      - id: "design-reviewer"
+        name: "Design Review"
+        description: "UI/UX 审查、可用性评估"
+        tags: ["design", "review", "ux", "usability"]
 
   - id: "general-agent"
     name: "General Agent"

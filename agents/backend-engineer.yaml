@@ -1,0 +1,6 @@
+name: Backend Engineer
+endpoint: http://localhost:9002
+protocol: a2a
+skills:
+- backend-engineer
+description: 专业后端工程师，擅长 API 设计、数据库建模、Python/FastAPI/Node.js 服务端

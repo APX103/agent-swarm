@@ -31,7 +31,9 @@ class DispatcherConfig:
 
 
 class _Backend(Protocol):
-    async def candidates(self, agent_type: str) -> list[DispatchTarget]: ...
+    async def candidates(
+        self, agent_type: str, agent_id: Optional[str] = None
+    ) -> list[DispatchTarget]: ...
 
     async def invoke(self, target: DispatchTarget, request: DispatchRequest) -> DispatchAttempt: ...
 
@@ -59,12 +61,12 @@ class Dispatcher:
     # ── candidate resolution (R2.3) ────────────────────────────────────────────
 
     async def _resolve(
-        self, agent_type: str
+        self, request: DispatchRequest
     ) -> list[tuple[DispatchTarget, _Backend]]:
         pairs: list[tuple[DispatchTarget, _Backend]] = []
         for backend in self._backends:
             try:
-                cands = await backend.candidates(agent_type)
+                cands = await backend.candidates(request.agent_type, request.agent_id)
             except Exception:
                 logger.warning("candidates() failed for a backend", exc_info=True)
                 continue
@@ -100,7 +102,7 @@ class Dispatcher:
         return result
 
     async def _do_dispatch(self, request: DispatchRequest) -> DispatchResult:
-        pairs = await self._resolve(request.agent_type)
+        pairs = await self._resolve(request)
         if self._config.health_precheck:
             pairs = await self._filter_healthy(pairs)
 

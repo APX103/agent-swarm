@@ -7,7 +7,7 @@ a real A2A client rather than being treated as OpenAI-compatible.
 import logging
 from typing import Optional
 
-from .base import AgentBackend, AgentCapabilities, AgentResult
+from .base import AgentBackend, AgentCapabilities, AgentResult, ProgressCallback
 from src.common.a2a_client import A2AClient, A2AMessage
 
 logger = logging.getLogger(__name__)
@@ -46,15 +46,19 @@ class A2AAdapter(AgentBackend):
             output_modes=["text", "artifacts"],
         )
 
-    async def invoke(self, task: str, context: dict = None) -> AgentResult:
-        """Send the task as an A2A message (blocking) and map the result."""
+    async def invoke(
+        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+    ) -> AgentResult:
+        """Send the task as an A2A message and map the result.
+
+        When *on_progress* is supplied, send non-blocking and poll the task,
+        forwarding each snapshot (state + message + progress) to the callback —
+        mirroring how ``DockerBackend`` streams worker progress. Otherwise block.
+        """
         client = self._get_client()
         try:
-            a2a_task = await client.send_message(
-                A2AMessage(role="user", text=task), blocking=True
-            )
+            a2a_task = await self._invoke_inner(client, task, on_progress)
         except Exception as e:
-            # A2AClient swallows most errors and returns None, but be defensive.
             logger.exception("A2A send failed for %s", self.base_url)
             return AgentResult(success=False, output="", error=f"A2A send failed: {e!s}")
 
@@ -69,6 +73,27 @@ class A2AAdapter(AgentBackend):
             error=None if success else (f"A2A task state: {a2a_task.state}"),
             metadata={"task_id": a2a_task.task_id, "state": a2a_task.state},
         )
+
+    async def _invoke_inner(self, client: A2AClient, task: str, on_progress):
+        """Blocking send, or non-blocking + poll forwarding, depending on *on_progress*."""
+        if on_progress is None:
+            return await client.send_message(
+                A2AMessage(role="user", text=task), blocking=True
+            )
+
+        # streaming path: non-blocking send, then poll + forward snapshots
+        a2a_task = await client.send_message(
+            A2AMessage(role="user", text=task), blocking=False
+        )
+        if a2a_task is None:
+            return None
+        async for snap in client.poll_task(a2a_task.task_id, interval=2.0, timeout=float(self.timeout)):
+            try:
+                await on_progress({"state": snap.state, "message": snap.message, "progress": snap.progress})
+            except Exception:
+                logger.warning("progress callback failed for %s", self.base_url, exc_info=True)
+            a2a_task = snap
+        return a2a_task
 
     async def health_check(self) -> bool:
         """Healthy if the agent serves an AgentCard."""

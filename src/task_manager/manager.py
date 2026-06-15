@@ -25,6 +25,7 @@ class Task:
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
     work_dir: Optional[Path] = None
+    session_id: Optional[str] = None  # bound session (for cancel→session event linkage)
     # 事件回调
     _event_subscribers: list[Callable] = field(default_factory=list)
     

@@ -1,0 +1,6 @@
+name: Data Engineer
+endpoint: http://localhost:9007
+protocol: a2a
+skills:
+- data-engineer
+description: 数据工程师，擅长数据管道、ETL、SQL 与数据分析脚本

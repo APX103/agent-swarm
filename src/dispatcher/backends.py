@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 class DispatchBackend(Protocol):
     """Structural shape every dispatch backend implements."""
 
-    async def candidates(self, agent_type: str) -> list[DispatchTarget]: ...
+    async def candidates(
+        self, agent_type: str, agent_id: Optional[str] = None
+    ) -> list[DispatchTarget]: ...
 
     async def invoke(self, target: DispatchTarget, request: DispatchRequest) -> DispatchAttempt: ...
 
@@ -38,7 +40,7 @@ class DockerBackend:
         self._api_key = api_key
         self._worker_host = worker_host
 
-    async def candidates(self, agent_type: str) -> list[DispatchTarget]:
+    async def candidates(self, agent_type: str, agent_id: Optional[str] = None) -> list[DispatchTarget]:
         # The pool manages multiple containers internally; expose one logical target.
         return [DispatchTarget(kind=TargetKind.DOCKER, agent_type=agent_type)]
 
@@ -129,8 +131,21 @@ class ExternalAgentBackend:
         self.registry = registry
         self.adapter_manager = adapter_manager
 
-    async def candidates(self, agent_type: str) -> list[DispatchTarget]:
+    async def candidates(self, agent_type: str, agent_id: Optional[str] = None) -> list[DispatchTarget]:
         try:
+            # Direct selection by agent_id wins when provided (used by direct-chat).
+            if agent_id:
+                a = await self.registry.get_agent(agent_id)
+                if not a:
+                    return []
+                return [
+                    DispatchTarget(
+                        kind=TargetKind.EXTERNAL,
+                        agent_type=agent_type,
+                        agent_id=agent_id,
+                        endpoint=a.get("endpoint"),
+                    )
+                ]
             agents = await self.registry.find_by_skill(agent_type)
         except Exception:
             logger.warning("find_by_skill(%s) failed", agent_type, exc_info=True)
@@ -159,7 +174,7 @@ class ExternalAgentBackend:
                 error=f"No adapter for external agent {target.agent_id}",
             )
         try:
-            result = await adapter.invoke(request.task, request.context)
+            result = await adapter.invoke(request.task, request.context, request.on_progress)
         except asyncio.CancelledError:
             logger.info("External dispatch cancelled for agent %s (sync HTTP — cannot mid-call cancel)", target.agent_id)
             raise

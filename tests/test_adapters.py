@@ -253,6 +253,9 @@ class TestCLIAdapter:
     async def test_cli_adapter_invoke_timeout(self):
         """Timeout triggers kill and returns error AgentResult."""
         mock_proc = AsyncMock()
+        # kill() is a SYNC method on asyncio.subprocess.Process — make it a
+        # plain MagicMock so it doesn't leak an unawaited coroutine warning.
+        mock_proc.kill = MagicMock()
         mock_proc.communicate.side_effect = asyncio.TimeoutError()
         mock_proc.returncode = -9  # SIGKILL
 

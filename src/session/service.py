@@ -1,11 +1,14 @@
-"""SessionService — create/get/update sessions with structured state + events.
+"""SessionService — async session store with structured state + events.
 
-SQLite-backed (zero deps). Each session has:
+SQLite-backed (zero deps). All public methods are ``async``; every blocking
+``sqlite3`` call is run off the event loop via :func:`asyncio.to_thread` so a
+slow disk can't stall request handling. Each session has:
 - state: a dict that agents read/write (plan, artifacts, decisions).
 - events: an append-only log of semantic events.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -20,13 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 class SessionService:
-    """SQLite-backed session service with structured state + events."""
+    """Async SQLite-backed session service with structured state + events."""
 
     def __init__(self, db_path: str | Path, base_dir: str | Path) -> None:
         self._db_path = str(db_path)
         self._base = Path(base_dir)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        # Schema init runs once at construction (before the loop is hot); cheap
+        # and idempotent, so we keep it synchronous rather than forcing callers
+        # to await __init__.
         self._init_table()
+
+    # ── low-level sync sqlite helpers (always run in a worker thread) ─────────
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self._db_path)
@@ -47,62 +55,68 @@ class SessionService:
                 )"""
             )
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # ── public async API ─────────────────────────────────────────────────────
 
-    def get_or_create_with_id(self, session_id: str, tenant_id: str = "default") -> Session:
+    async def get_or_create_with_id(self, session_id: str, tenant_id: str = "default") -> Session:
         """Get existing session or create with the given session_id (for alignment with SessionManager)."""
-        existing = self.get_session(session_id)
+        existing = await self.get_session(session_id)
         if existing:
             return existing
         work_dir = str(self._base / "tenants" / tenant_id / "sessions" / session_id)
-        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(lambda: Path(work_dir).mkdir(parents=True, exist_ok=True))
         sess = Session(session_id=session_id, tenant_id=tenant_id, work_dir=work_dir)
-        self._save(sess)
+        await self._save(sess)
         return sess
 
-    def create_session(self, tenant_id: str = "default") -> Session:
+    async def create_session(self, tenant_id: str = "default") -> Session:
         """Create a fresh session with empty state + events."""
         sid = str(uuid.uuid4())[:8]
         work_dir = str(self._base / "tenants" / tenant_id / "sessions" / sid)
-        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(lambda: Path(work_dir).mkdir(parents=True, exist_ok=True))
 
         sess = Session(session_id=sid, tenant_id=tenant_id, work_dir=work_dir)
-        self._save(sess)
+        await self._save(sess)
         logger.info("Created session %s (work_dir=%s)", sid, work_dir)
         return sess
 
-    def get_session(self, session_id: str) -> Optional[Session]:
+    async def get_session(self, session_id: str) -> Optional[Session]:
         """Load session from SQLite (or None if not found)."""
-        with self._conn() as c:
-            row = c.execute(
-                "SELECT * FROM sessions_v2 WHERE session_id=?", (session_id,)
-            ).fetchone()
+        row = await asyncio.to_thread(self._get_session_row, session_id)
         if row is None:
             return None
         return self._row_to_session(row)
 
-    def append_event(self, session_id: str, event: dict[str, Any]) -> Optional[Session]:
+    def _get_session_row(self, session_id: str) -> Optional[sqlite3.Row]:
+        with self._conn() as c:
+            return c.execute(
+                "SELECT * FROM sessions_v2 WHERE session_id=?", (session_id,)
+            ).fetchone()
+
+    async def append_event(self, session_id: str, event: dict[str, Any]) -> Optional[Session]:
         """Append an event to the session's log + persist. Returns updated session."""
-        sess = self.get_session(session_id)
+        sess = await self.get_session(session_id)
         if sess is None:
             return None
         event.setdefault("timestamp", time.time())
         sess.events.append(event)
-        self._save(sess)
+        await self._save(sess)
         return sess
 
-    def update_state(self, session_id: str, delta: dict[str, Any]) -> Optional[Session]:
+    async def update_state(self, session_id: str, delta: dict[str, Any]) -> Optional[Session]:
         """Deep-merge delta into session.state + persist. Returns updated session."""
-        sess = self.get_session(session_id)
+        sess = await self.get_session(session_id)
         if sess is None:
             return None
         _deep_merge(sess.state, delta)
-        self._save(sess)
+        await self._save(sess)
         return sess
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _save(self, sess: Session) -> None:
+    async def _save(self, sess: Session) -> None:
+        await asyncio.to_thread(self._save_sync, sess)
+
+    def _save_sync(self, sess: Session) -> None:
         with self._conn() as c:
             c.execute(
                 """INSERT OR REPLACE INTO sessions_v2
