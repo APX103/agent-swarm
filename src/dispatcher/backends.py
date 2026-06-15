@@ -160,6 +160,9 @@ class ExternalAgentBackend:
             )
         try:
             result = await adapter.invoke(request.task, request.context)
+        except asyncio.CancelledError:
+            logger.info("External dispatch cancelled for agent %s (sync HTTP — cannot mid-call cancel)", target.agent_id)
+            raise
         except Exception as e:
             logger.exception("External adapter invoke failed for %s", target.agent_id)
             return DispatchAttempt(target=target, success=False, error=str(e))

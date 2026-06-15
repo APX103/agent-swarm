@@ -101,6 +101,16 @@ class TaskManager:
         })
         
         logger.info(f"Task {task_id}: {old_status.value} -> {status.value}")
+
+        # 持久化状态变更到 SQLite（覆盖 cancelled / running / 任意状态）
+        if self._store and task:
+            self._store.save_task(
+                task_id=task_id, tenant_id=task.tenant_id,
+                status=status.value, result=task.result,
+                artifacts=task.artifacts,
+                work_dir=str(task.work_dir) if task.work_dir else None,
+                completed_at=task.completed_at.isoformat() if task.completed_at else None,
+            )
     
     async def complete_task(self, task_id: str, result: str):
         """完成任务"""
