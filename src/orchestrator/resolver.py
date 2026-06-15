@@ -35,6 +35,7 @@ class OrchestratorResolver:
         tenant_id: str,
         user_message: str,
         event_callback: EventCallback = None,
+        session=None,
     ) -> str:
         if self._config.provider == "external":
             external = self._build_external()
@@ -57,6 +58,8 @@ class OrchestratorResolver:
                     raise RuntimeError(msg)
                 logger.info("Falling back to builtin orchestrator")
 
+        if session is not None:
+            return await self._builtin.execute(task_id, tenant_id, user_message, event_callback, session=session)
         return await self._builtin.execute(task_id, tenant_id, user_message, event_callback)
 
     async def _emit_fallback(

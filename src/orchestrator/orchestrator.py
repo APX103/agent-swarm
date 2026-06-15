@@ -129,6 +129,7 @@ class Orchestrator:
         self._current_tenant_id: Optional[str] = None
         self._shared_context: str = ""  # plan_task 生成的共享上下文
         self._current_emit = None  # set during execute(), used to forward worker progress
+        self._current_session_work_dir: Optional[str] = None  # session work folder (for worker shared_dir)
 
         # 工具定义
         self._tools = self._define_tools()
@@ -310,26 +311,36 @@ class Orchestrator:
         ]
     
     async def execute(self, task_id: str, tenant_id: str, user_message: str,
-                     event_callback=None) -> str:
+                     event_callback=None, session=None) -> str:
         """执行编排流程
-        
+
         Args:
             task_id: 任务 ID
             tenant_id: 租户 ID
             user_message: 用户消息
             event_callback: 事件回调（用于 WebSocket 推送）
-        
+            session: 可选的 SessionState（传入则复用其对话历史 + work folder）
+
         Returns:
             最终结果文本
         """
         self._current_task_id = task_id
         self._current_tenant_id = tenant_id
         self._dispatched.clear()
-        self._shared_context = ""
-        self._messages = [
-            {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ]
+        self._current_session_work_dir = str(session.work_dir) if session else None
+
+        if session and session.messages:
+            # resume: 加载历史 + 追加新消息（不清零）
+            self._messages = session.messages
+            self._shared_context = session.shared_context
+            self._messages.append({"role": "user", "content": user_message})
+        else:
+            # 新 session（或无 session）：从头开始
+            self._shared_context = ""
+            self._messages = [
+                {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ]
         
         async def emit(event_type: str, data: dict = None, agent: str = None):
             if event_callback:
@@ -427,9 +438,15 @@ class Orchestrator:
             if finalize_ok:
                 break
         
+        # 保存 session 状态（对话历史 + 共享上下文）
+        if session:
+            session.messages = self._messages
+            session.shared_context = self._shared_context
+
         # 清理：容器归还已由 Dispatcher 在每次 dispatch 的 finally 内完成，这里仅清理分派记录
         self._dispatched.clear()
         self._current_emit = None
+        self._current_session_work_dir = None
 
         return final_result
     
@@ -510,7 +527,7 @@ class Orchestrator:
         request = DispatchRequest(
             agent_type=agent_type,
             task=full_task,
-            context={"task_id": self._current_task_id, "tenant_id": self._current_tenant_id},
+            context=self._build_dispatch_context(),
             on_progress=on_progress,
         )
         result = await self._dispatcher.dispatch(request)
@@ -524,6 +541,13 @@ class Orchestrator:
                 f"任务状态: {state}\n"
                 f"Agent 响应: {text[:500]}")
     
+    def _build_dispatch_context(self) -> dict:
+        """Build context for DispatchRequest, including session work_dir if active."""
+        ctx = {"task_id": self._current_task_id, "tenant_id": self._current_tenant_id}
+        if self._current_session_work_dir:
+            ctx["shared_dir"] = self._current_session_work_dir
+        return ctx
+
     def _build_worker_task(self, task: str) -> str:
         """将共享上下文注入 Worker 任务描述"""
         if self._shared_context:
@@ -542,7 +566,7 @@ class Orchestrator:
             request = DispatchRequest(
                 agent_type=agent_type,
                 task=full_task,
-                context={"task_id": self._current_task_id, "tenant_id": self._current_tenant_id},
+                context=self._build_dispatch_context(),
             )
             return agent_type, await self._dispatcher.dispatch(request)
 

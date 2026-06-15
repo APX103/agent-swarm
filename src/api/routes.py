@@ -18,6 +18,7 @@ from src.orchestrator.orchestrator import Orchestrator
 from src.container_pool.pool import ContainerPoolManager
 from src.observability.trace import set_trace_id
 from src.reliability.dead_letter import DeadLetterRecord, DeadLetterStore
+from src.session.manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ orchestrator: Optional[Orchestrator] = None
 task_manager: Optional[TaskManager] = None
 pool_manager: Optional[ContainerPoolManager] = None
 orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
+session_manager = None  # SessionManager for multi-turn sessions
 
 # Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
 _idempotency_index: dict[str, str] = {}
@@ -36,12 +38,13 @@ _idempotency_index: dict[str, str] = {}
 dead_letters = DeadLetterStore()
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None):
-    global orchestrator, task_manager, pool_manager, orchestrator_resolver
+def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None):
+    global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager
     orchestrator = orch
     task_manager = tm
     pool_manager = pool
     orchestrator_resolver = resolver
+    session_manager = sess_mgr
 
 
 # Per-tenant concurrency cap: backpressure so one tenant can't saturate the workers.
@@ -96,11 +99,19 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
                     artifacts=existing.artifacts,
                 )
 
+    # session: 复用已有（同 work folder + 对话历史）或新建
+    tenant = req.tenant_id or "default"
+    sess = session_manager.get_or_create(req.session_id, tenant) if session_manager else None
+
     # 创建任务
     task = await task_manager.create_task(
         user_message=req.message,
-        tenant_id=req.tenant_id or "default",
+        tenant_id=tenant,
     )
+
+    # session: 覆盖 work_dir 到 session 目录（同一 session 多轮产出落同一处）
+    if sess:
+        task.work_dir = sess.work_dir
 
     if idempotency_key:
         _idempotency_index[idempotency_key] = task.task_id
@@ -129,6 +140,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
                     tenant_id=task.tenant_id,
                     user_message=req.message,
                     event_callback=on_event,
+                    session=sess,
                 )
                 await task_manager.complete_task(task.task_id, result)
             except Exception as e:
@@ -148,6 +160,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
         task_id=task.task_id,
         status=TaskStatus.RUNNING,
         message="任务已创建，正在执行中...",
+        session_id=sess.session_id if sess else None,
     )
 
 

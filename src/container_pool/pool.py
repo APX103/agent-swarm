@@ -170,10 +170,11 @@ class ContainerPoolManager:
             logger.error(f"Failed to spawn container {index}: {e}")
             return None
     
-    async def checkout(self, agent_card_id: str, task_id: str, 
+    async def checkout(self, agent_card_id: str, task_id: str,
                        model: str, base_url: str, api_key: str,
                        tenant_id: Optional[str] = None,
-                       orchestrator_url: Optional[str] = None) -> Optional[PooledContainer]:
+                       orchestrator_url: Optional[str] = None,
+                       shared_dir_override: Optional[str] = None) -> Optional[PooledContainer]:
         """从池中获取一个容器，注入配置
         
         Args:
@@ -208,8 +209,15 @@ class ContainerPoolManager:
             idle.last_used_at = time.time()
         
         # 注入配置
-        # shared_dir 指向容器的 task 工作目录（而非 shared_output 根目录）
-        container_shared_dir = f"/workspace/artifacts/tenants/{tenant_id or 'default'}/tasks/{task_id}"
+        # shared_dir 指向容器的 task 工作目录（或 session 工作目录，如果 override 给定）
+        if shared_dir_override:
+            try:
+                rel = Path(shared_dir_override).relative_to(self.shared_output_base)
+                container_shared_dir = f"/workspace/artifacts/{rel}"
+            except (ValueError, TypeError):
+                container_shared_dir = shared_dir_override
+        else:
+            container_shared_dir = f"/workspace/artifacts/tenants/{tenant_id or 'default'}/tasks/{task_id}"
         config = {
             "task_id": task_id,
             "tenant_id": tenant_id or "default",

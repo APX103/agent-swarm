@@ -18,6 +18,7 @@ from src.dispatcher.backends import DockerBackend, ExternalAgentBackend
 from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
 from src.dispatcher.result_cache import ResultCache
 from src.orchestrator.resolver import OrchestratorResolver
+from src.session.manager import SessionManager
 from src.observability.trace import TraceIdFilter
 from src.registry.sweeper import health_sweep_loop
 
@@ -106,9 +107,10 @@ async def _lifespan(app: FastAPI):
     )
     logger.info("Orchestrator initialized (unified dispatcher wired)")
 
-    # 7. 组装可插拔编排器解析器并注入依赖
+    # 7. 组装 session 管理器 + 可插拔编排器解析器并注入依赖
+    session_mgr = SessionManager(settings.storage.shared_output_base)
     resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
-    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver)
+    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr)
     
     logger.info("🐝 Agent Swarm ready!")
     
