@@ -49,9 +49,12 @@ async def _lifespan(app: FastAPI):
     for warning in validate_settings(settings):
         logger.warning("config check: %s", warning)
 
-    # 1. 初始化任务管理器
+    # 1. 初始化持久化 + 任务管理器
+    from src.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(Path(settings.storage.shared_output_base) / "swarm.db")
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
+        store=store,
     )
     logger.info("TaskManager initialized")
     
@@ -108,7 +111,7 @@ async def _lifespan(app: FastAPI):
     logger.info("Orchestrator initialized (unified dispatcher wired)")
 
     # 7. 组装 session 管理器 + 可插拔编排器解析器并注入依赖
-    session_mgr = SessionManager(settings.storage.shared_output_base)
+    session_mgr = SessionManager(settings.storage.shared_output_base, store=store)
     resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
     set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr)
     
