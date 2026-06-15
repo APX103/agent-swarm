@@ -125,3 +125,78 @@ async def test_create_artifact_zip(task_manager):
     zip_path = await task_manager.create_artifact_zip(task.task_id)
     assert zip_path is not None
     assert Path(zip_path).exists()
+
+
+# ── SQLite persistence integration tests ─────────────────────────────────────
+
+
+@pytest.fixture
+def task_manager_with_store(tmp_path):
+    """TaskManager backed by SQLiteStore (simulating production wiring)."""
+    from src.task_manager.manager import TaskManager
+    from src.storage.sqlite_store import SQLiteStore
+    store = SQLiteStore(tmp_path / "swarm.db")
+    return TaskManager(shared_output_base=str(tmp_path), store=store)
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_survives_restart(task_manager_with_store, tmp_path):
+    """进程重启后，新 TaskManager 实例应能从 SQLite 列出历史任务。"""
+    store = task_manager_with_store._store
+    t1 = await task_manager_with_store.create_task("任务1", tenant_id="t1")
+    t2 = await task_manager_with_store.create_task("任务2", tenant_id="t1")
+
+    # 模拟进程重启：新建 TaskManager，复用同一个 db
+    from src.task_manager.manager import TaskManager
+    fresh_tm = TaskManager(shared_output_base=str(tmp_path), store=store)
+
+    all_tasks = fresh_tm.list_tasks()
+    assert len(all_tasks) == 2
+    assert {t.task_id for t in all_tasks} == {t1.task_id, t2.task_id}
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_with_tenant_survives_restart(task_manager_with_store, tmp_path):
+    """进程重启后，按租户过滤任务仍然有效。"""
+    store = task_manager_with_store._store
+    t1 = await task_manager_with_store.create_task("任务1", tenant_id="tenant-a")
+    t2 = await task_manager_with_store.create_task("任务2", tenant_id="tenant-b")
+
+    from src.task_manager.manager import TaskManager
+    fresh_tm = TaskManager(shared_output_base=str(tmp_path), store=store)
+
+    a_tasks = fresh_tm.list_tasks(tenant_id="tenant-a")
+    assert len(a_tasks) == 1
+    assert a_tasks[0].task_id == t1.task_id
+
+    b_tasks = fresh_tm.list_tasks(tenant_id="tenant-b")
+    assert len(b_tasks) == 1
+    assert b_tasks[0].task_id == t2.task_id
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_memory_takes_precedence(task_manager_with_store, tmp_path):
+    """内存中的任务对象应优先于 SQLite 中的快照，避免重复和状态回退。"""
+    store = task_manager_with_store._store
+    t = await task_manager_with_store.create_task("任务", tenant_id="t1")
+
+    from src.task_manager.manager import TaskManager
+    fresh_tm = TaskManager(shared_output_base=str(tmp_path), store=store)
+
+    # 第一次 list_tasks 会从 SQLite 恢复任务到 fresh_tm 的内存
+    tasks = fresh_tm.list_tasks()
+    assert len(tasks) == 1
+    assert tasks[0].task_id == t.task_id
+
+    # 修改 fresh_tm 内存中的状态（不保存到 SQLite）
+    from src.api.models import TaskStatus
+    fresh_task = fresh_tm.get_task(t.task_id)
+    fresh_task.status = TaskStatus.RUNNING
+
+    # 再次 list_tasks 应使用内存中的对象，不重复、不回退
+    tasks_again = fresh_tm.list_tasks()
+    assert len(tasks_again) == 1
+    assert tasks_again[0].status == TaskStatus.RUNNING
+    assert tasks_again[0] is fresh_task
+
+

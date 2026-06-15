@@ -149,6 +149,29 @@ class TaskManager:
                 "message": error,
             })
     
+    def _task_from_dict(self, data: dict) -> Task:
+        """从 SQLite 行数据重建 Task 对象。"""
+        task = Task(
+            task_id=data["task_id"],
+            tenant_id=data.get("tenant_id", "default"),
+            user_message=data.get("user_message", ""),
+            status=TaskStatus(data.get("status", "created")),
+            result=data.get("result"),
+            artifacts=data.get("artifacts", []),
+            work_dir=Path(data["work_dir"]) if data.get("work_dir") else None,
+        )
+        if data.get("created_at"):
+            try:
+                task.created_at = datetime.fromisoformat(data["created_at"])
+            except ValueError:
+                pass
+        if data.get("completed_at"):
+            try:
+                task.completed_at = datetime.fromisoformat(data["completed_at"])
+            except ValueError:
+                pass
+        return task
+
     def get_task(self, task_id: str) -> Optional[Task]:
         """获取任务（先查内存缓存，miss 则查 SQLite 恢复）"""
         task = self._tasks.get(task_id)
@@ -157,22 +180,24 @@ class TaskManager:
         if self._store:
             data = self._store.get_task(task_id)
             if data:
-                task = Task(
-                    task_id=data["task_id"],
-                    tenant_id=data.get("tenant_id", "default"),
-                    user_message=data.get("user_message", ""),
-                    status=TaskStatus(data.get("status", "created")),
-                    result=data.get("result"),
-                    artifacts=data.get("artifacts", []),
-                    work_dir=Path(data["work_dir"]) if data.get("work_dir") else None,
-                )
+                task = self._task_from_dict(data)
                 self._tasks[task_id] = task
                 return task
         return None
     
     def list_tasks(self, tenant_id: Optional[str] = None) -> list[Task]:
-        """列举任务"""
-        tasks = list(self._tasks.values())
+        """列举任务（内存缓存 + SQLite 持久化，重启后也能列出历史任务）。"""
+        # 优先使用内存中的 Task 对象（最新状态）
+        merged: dict[str, Task] = dict(self._tasks)
+
+        # 从 SQLite 补充历史任务，内存中已存在的不覆盖
+        if self._store:
+            for data in self._store.list_tasks(tenant_id=tenant_id):
+                task_id = data["task_id"]
+                if task_id not in merged:
+                    merged[task_id] = self._task_from_dict(data)
+
+        tasks = list(merged.values())
         if tenant_id:
             tasks = [t for t in tasks if t.tenant_id == tenant_id]
         return sorted(tasks, key=lambda t: t.created_at, reverse=True)
