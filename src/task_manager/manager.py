@@ -44,10 +44,11 @@ class Task:
 class TaskManager:
     """任务管理器"""
     
-    def __init__(self, shared_output_base: str):
+    def __init__(self, shared_output_base: str, store=None):
         self.shared_output_base = Path(shared_output_base)
         self._tasks: dict[str, Task] = {}
         self._lock = asyncio.Lock()
+        self._store = store  # optional SQLiteStore for persistence
     
     async def create_task(self, user_message: str, 
                           tenant_id: str = "default") -> Task:
@@ -70,7 +71,13 @@ class TaskManager:
         
         async with self._lock:
             self._tasks[task_id] = task
-        
+
+        if self._store:
+            self._store.save_task(
+                task_id=task_id, tenant_id=tenant_id, user_message=user_message,
+                status="created", work_dir=str(work_dir),
+            )
+
         logger.info(f"Created task {task_id} for tenant {tenant_id}")
         return task
     
@@ -113,7 +120,16 @@ class TaskManager:
                         task.artifacts.append(str(f.relative_to(task.work_dir)))
         
         await self.update_status(task_id, TaskStatus.COMPLETED)
-        
+
+        if self._store and task:
+            self._store.save_task(
+                task_id=task_id, tenant_id=task.tenant_id,
+                status=TaskStatus.COMPLETED.value, result=result,
+                artifacts=task.artifacts,
+                work_dir=str(task.work_dir) if task.work_dir else None,
+                completed_at=datetime.now().isoformat(),
+            )
+
         await task.emit_event({
             "type": "complete",
             "task_id": task_id,
@@ -134,8 +150,25 @@ class TaskManager:
             })
     
     def get_task(self, task_id: str) -> Optional[Task]:
-        """获取任务"""
-        return self._tasks.get(task_id)
+        """获取任务（先查内存缓存，miss 则查 SQLite 恢复）"""
+        task = self._tasks.get(task_id)
+        if task:
+            return task
+        if self._store:
+            data = self._store.get_task(task_id)
+            if data:
+                task = Task(
+                    task_id=data["task_id"],
+                    tenant_id=data.get("tenant_id", "default"),
+                    user_message=data.get("user_message", ""),
+                    status=TaskStatus(data.get("status", "created")),
+                    result=data.get("result"),
+                    artifacts=data.get("artifacts", []),
+                    work_dir=Path(data["work_dir"]) if data.get("work_dir") else None,
+                )
+                self._tasks[task_id] = task
+                return task
+        return None
     
     def list_tasks(self, tenant_id: Optional[str] = None) -> list[Task]:
         """列举任务"""

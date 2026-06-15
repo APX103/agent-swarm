@@ -39,9 +39,10 @@ class SessionManager:
     loaded from disk automatically.
     """
 
-    def __init__(self, base: str) -> None:
+    def __init__(self, base: str, store=None) -> None:
         self._base = Path(base)
         self._sessions: dict[str, SessionState] = {}
+        self._store = store  # optional SQLiteStore
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -60,9 +61,9 @@ class SessionManager:
             logger.info("Resuming session %s from memory", session_id)
             return self._sessions[session_id]
 
-        # 2. disk (restart recovery)
+        # 2. persistent store (SQLite or filesystem fallback)
         if session_id:
-            loaded = self._load_from_disk(session_id, tenant_id)
+            loaded = self._load_persistent(session_id, tenant_id)
             if loaded is not None:
                 self._sessions[session_id] = loaded
                 logger.info("Restored session %s from disk (%d messages)", session_id, len(loaded.messages))
@@ -78,13 +79,35 @@ class SessionManager:
         return state
 
     def save(self, state: SessionState) -> None:
-        """Persist session context to disk. Call after orchestrator.execute()."""
-        self._save_to_disk(state)
+        """Persist session context (SQLite if available, else filesystem JSON)."""
+        if self._store:
+            self._store.save_session(
+                state.session_id, state.tenant_id, str(state.work_dir),
+                state.messages, state.shared_context, state.created_at,
+            )
+        else:
+            self._save_to_disk(state)
 
     def get(self, session_id: str) -> Optional[SessionState]:
         return self._sessions.get(session_id)
 
     # ── disk persistence ──────────────────────────────────────────────────────
+
+    def _load_persistent(self, session_id: str, tenant_id: str) -> Optional[SessionState]:
+        """Load from SQLite (preferred) or filesystem JSON (fallback)."""
+        if self._store:
+            data = self._store.get_session(session_id)
+            if data:
+                work_dir = Path(data["work_dir"])
+                return SessionState(
+                    session_id=session_id,
+                    tenant_id=data.get("tenant_id", tenant_id),
+                    work_dir=work_dir,
+                    messages=data.get("messages", []),
+                    shared_context=data.get("shared_context", ""),
+                    created_at=data.get("created_at", time.time()),
+                )
+        return self._load_from_disk(session_id, tenant_id)
 
     def _context_path(self, session_id: str, tenant_id: str) -> Path:
         return self._base / "tenants" / tenant_id / "sessions" / session_id / "_session" / "context.json"
