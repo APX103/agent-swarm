@@ -14,6 +14,23 @@
 
 ## P1 — 直接价值延伸（建议下次从这里起）
 
+### 0. 🔴 Session 持久化与多轮对话（最高优先，用户明确要求 2026-06-15）
+- **现状缺口**：每次 `POST /api/chat` 都是独立的、一次性的任务。编排器 `_messages` 每次清零，无对话记忆；每个 task 独立 work folder（`tasks/{task_id}/`），无 session 概念。
+- **用户期望**：
+  1. **同一 session 多轮对话**：用户在同一 session 里多次发消息，编排器保留上下文（`_messages` 不清零，或做压缩后保留摘要）。
+  2. **同一 session → 同一 work folder**：session 内所有轮次的 Agent 产出都落到同一个目录，不切换。
+  3. **新 session → 新 work folder**：不同 session 互相隔离。
+  4. **老 session ID → 老 work folder**：用老 session ID 继续对话时，复用老目录（能接着改之前的代码）。
+- **设计方向**（待 brainstorm）：
+  - `ChatRequest` 加 `session_id` 字段（可选，缺省 = 新建 session）。
+  - `task_manager` 增加 session→work_folder 绑定（session 第一次创建时建 folder，后续复用）。
+  - 编排器 `execute()` 检查 session_id：若已存在 → 加载历史 `_messages`（或压缩摘要）+ 复用 folder；若新建 → 初始化。
+  - work folder 从 `tasks/{task_id}/` 改为 `sessions/{session_id}/`（或 `sessions/{session_id}/tasks/{task_id}/` 兼容多轮多任务）。
+  - 对话历史压缩：超过阈值时摘要 + 保留最近 N 轮。
+- **影响面**：`api/routes.py`（chat 入口）、`task_manager`（session→folder）、`orchestrator.execute()`（历史加载/复用）、`pool.checkout`（shared_dir 用 session 路径）、`config`（session TTL 等）。
+- **规模**：L（涉及编排器生命周期 + 存储模型 + API 契约变更）。
+- **验证标准**：同一 session 发 2 条消息 → 第 2 条能看到第 1 条的产物 + 编排器记得上文；不同 session → 隔离目录。
+
 ### 1. 可观测性·指标（metrics）
 - **现状**：只有 trace_id（日志串联）；缺延迟/失败率/队列深度/每 agent 统计。
 - **做法**：`src/observability/metrics.py` 一个轻量 in-memory Metrics（计数器 + 简单直方图）；在 Dispatcher 记录 dispatch 次数/成功失败/耗时/候选尝试次数；新增 `GET /api/v1/metrics`（JSON 或 Prometheus 文本）。
