@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,7 +83,7 @@ async def _lifespan(app: FastAPI):
     logger.info("AdapterManager initialized")
 
     # 3b. 声明式 Agent 注册 (agents/*.yaml)
-    _agents_dir = Path(__file__).resolve().parent.parent / "agents"
+    _agents_dir = Path("agents")
     if _agents_dir.exists():
         import yaml as _yaml
         from src.adapters.adapter_manager import create_adapter as _create_adapter
