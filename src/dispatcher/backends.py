@@ -44,6 +44,7 @@ class DockerBackend:
     async def invoke(self, target: DispatchTarget, request: DispatchRequest) -> DispatchAttempt:
         task_id = request.context.get("task_id")
         tenant_id = request.context.get("tenant_id")
+        shared_dir_override = request.context.get("shared_dir")  # session work_dir (host path)
         container = await self.pool.checkout(
             agent_card_id=target.agent_type,
             task_id=task_id,
@@ -51,6 +52,7 @@ class DockerBackend:
             base_url=self._base_url,
             api_key=self._api_key,
             tenant_id=tenant_id,
+            shared_dir_override=shared_dir_override,
         )
         if container is None:
             return DispatchAttempt(

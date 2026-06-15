@@ -16,6 +16,7 @@ class ChatRequest(BaseModel):
     """用户聊天请求"""
     message: str = Field(..., description="用户消息内容")
     tenant_id: Optional[str] = Field(None, description="租户 ID（多租户场景）")
+    session_id: Optional[str] = Field(None, description="会话 ID（传入则复用该 session 的 work folder + 对话历史）")
 
 
 class TaskResponse(BaseModel):
@@ -24,6 +25,7 @@ class TaskResponse(BaseModel):
     status: TaskStatus
     message: Optional[str] = None
     artifacts: list[str] = Field(default_factory=list)
+    session_id: Optional[str] = None
 
 
 class ArtifactInfo(BaseModel):
