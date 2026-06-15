@@ -275,6 +275,13 @@ async def list_dead_letters(limit: int = Query(50)):
     ]
 
 
+@router.get("/api/v1/metrics")
+async def get_metrics_endpoint():
+    """Dispatch metrics snapshot (counters, latency, failure rate)."""
+    from src.observability.metrics import get_metrics
+    return get_metrics().snapshot()
+
+
 @router.websocket("/ws/tasks/{task_id}")
 async def task_websocket(websocket: WebSocket, task_id: str):
     """WebSocket 实时任务事件流"""

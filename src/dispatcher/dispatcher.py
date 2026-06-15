@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
 from src.dispatcher.base import DispatchAttempt, DispatchRequest, DispatchResult, DispatchTarget
 from src.dispatcher.result_cache import ResultCache
+from src.observability.metrics import Metrics, get_metrics
 from src.resilience.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,12 @@ class Dispatcher:
         backends: list[_Backend],
         config: Optional[DispatcherConfig] = None,
         result_cache: Optional[ResultCache] = None,
+        metrics: Optional[Metrics] = None,
     ) -> None:
         self._backends = backends
         self._config = config or DispatcherConfig()
         self._result_cache = result_cache
+        self._metrics = metrics or get_metrics()
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
         # per-target circuit breakers, keyed by (kind, agent_id|agent_type)
         self._breakers: dict[tuple[str, str], CircuitBreaker] = {}
@@ -88,6 +92,14 @@ class Dispatcher:
     # ── public entrypoint ──────────────────────────────────────────────────────
 
     async def dispatch(self, request: DispatchRequest) -> DispatchResult:
+        """Public entry: times the dispatch and records metrics."""
+        start = time.monotonic()
+        result = await self._do_dispatch(request)
+        if self._metrics:
+            self._metrics.record_dispatch(result.success, (time.monotonic() - start) * 1000)
+        return result
+
+    async def _do_dispatch(self, request: DispatchRequest) -> DispatchResult:
         pairs = await self._resolve(request.agent_type)
         if self._config.health_precheck:
             pairs = await self._filter_healthy(pairs)
