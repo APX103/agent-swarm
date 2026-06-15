@@ -142,9 +142,13 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
                     event_callback=on_event,
                     session=sess,
                 )
+                if sess and session_manager:
+                    session_manager.save(sess)
                 await task_manager.complete_task(task.task_id, result)
             except Exception as e:
                 logger.error(f"Orchestration failed: {e}", exc_info=True)
+                if sess and session_manager:
+                    session_manager.save(sess)
                 dead_letters.record(DeadLetterRecord(
                     task_id=task.task_id,
                     tenant_id=task.tenant_id,
