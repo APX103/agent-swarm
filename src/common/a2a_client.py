@@ -172,6 +172,27 @@ class A2AClient:
                     return
             await asyncio.sleep(interval)
 
+    async def cancel_task(self, task_id: str) -> bool:
+        """发送 tasks/cancel 到 Worker，取消后台执行。"""
+        request = {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tasks/cancel",
+            "params": {"id": task_id},
+        }
+        try:
+            resp = await self._client.post(
+                self.base_url,
+                json=request,
+                headers={"Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                result = resp.json().get("result", {})
+                return result.get("status") == "canceled"
+        except Exception as e:
+            logger.error(f"Failed to cancel task: {e}")
+        return False
+
     async def close(self):
         await self._client.aclose()
     

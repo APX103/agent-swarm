@@ -197,6 +197,8 @@ app = FastAPI(title=f"Worker Agent ({AGENT_ROLE})")
 
 # 内存中的任务存储
 _tasks: dict[str, dict] = {}
+# 后台执行的任务（用于取消）
+_bg_tasks: dict[str, asyncio.Task] = {}
 
 
 def resolve_card(role: str) -> dict:
@@ -249,6 +251,8 @@ async def a2a_endpoint(request: Request):
         return await handle_get_task(params, request_id)
     elif method == "tasks/list":
         return await handle_list_tasks(params, request_id)
+    elif method == "tasks/cancel":
+        return await handle_cancel_task(params, request_id)
     else:
         return JSONResponse({
             "jsonrpc": "2.0",
@@ -309,7 +313,8 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
         return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
 
     # non-blocking: run in background, return immediately
-    asyncio.create_task(_run())
+    bg = asyncio.create_task(_run())
+    _bg_tasks[task_id] = bg
     return JSONResponse({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -342,6 +347,23 @@ async def handle_list_tasks(params: dict, request_id: int) -> JSONResponse:
         "jsonrpc": "2.0",
         "id": request_id,
         "result": list(_tasks.values()),
+    })
+
+
+async def handle_cancel_task(params: dict, request_id: int) -> JSONResponse:
+    """处理 tasks/cancel —— 取消后台执行的 call_llm，避免继续烧 token"""
+    task_id = params.get("id", "")
+    bg = _bg_tasks.get(task_id)
+    if bg and not bg.done():
+        bg.cancel()
+        logger.info("Cancelled background task %s", task_id)
+        return JSONResponse({
+            "jsonrpc": "2.0", "id": request_id,
+            "result": {"id": task_id, "status": "canceled"},
+        })
+    return JSONResponse({
+        "jsonrpc": "2.0", "id": request_id,
+        "error": {"code": -32001, "message": f"Task {task_id} not found or already done"},
     })
 
 

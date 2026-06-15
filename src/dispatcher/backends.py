@@ -8,6 +8,7 @@ so the Dispatcher can treat them uniformly.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional, Protocol
 
@@ -79,6 +80,15 @@ class DockerBackend:
                 a2a_task = await client.send_message(
                     A2AMessage(role="user", text=request.task), blocking=True
                 )
+        except asyncio.CancelledError:
+            # 编排器取消 → 传播到 worker（停止烧 token）
+            logger.info("Dispatch cancelled; propagating cancel to worker %s", target.agent_type)
+            try:
+                if a2a_task is not None and a2a_task.task_id:
+                    await client.cancel_task(a2a_task.task_id)
+            except Exception:
+                logger.warning("Failed to propagate cancel to worker", exc_info=True)
+            raise
         except Exception as e:
             logger.exception("Docker A2A send failed for %s", target.agent_type)
             send_error = f"A2A send error: {e!s}"
