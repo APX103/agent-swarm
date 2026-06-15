@@ -96,7 +96,7 @@ class Orchestrator:
     """编排器 Agent"""
     
     def __init__(self, settings, pool_manager: ContainerPoolManager, task_manager=None,
-                 dispatcher: Optional[Dispatcher] = None):
+                 dispatcher: Optional[Dispatcher] = None, session_service=None):
         self.settings = settings
         self.pool = pool_manager
         self.task_manager = task_manager
@@ -120,6 +120,7 @@ class Orchestrator:
                 DispatcherConfig(),
             )
         self._dispatcher = dispatcher
+        self._session_service = session_service  # Event-First SessionService (optional)
 
         # 当前任务的上下文
         self._messages: list[dict] = []
@@ -130,6 +131,7 @@ class Orchestrator:
         self._shared_context: str = ""  # plan_task 生成的共享上下文
         self._current_emit = None  # set during execute(), used to forward worker progress
         self._current_session_work_dir: Optional[str] = None  # session work folder (for worker shared_dir)
+        self._current_svc_session_id: Optional[str] = None  # SessionService session_id (for state/events)
 
         # 工具定义
         self._tools = self._define_tools()
@@ -328,6 +330,7 @@ class Orchestrator:
         self._current_tenant_id = tenant_id
         self._dispatched.clear()
         self._current_session_work_dir = str(session.work_dir) if session else None
+        self._current_svc_session_id = session.session_id if (session and self._session_service) else None
 
         if session and session.messages:
             # resume: 加载历史 + 追加新消息（不清零）
@@ -447,6 +450,7 @@ class Orchestrator:
         self._dispatched.clear()
         self._current_emit = None
         self._current_session_work_dir = None
+        self._current_svc_session_id = None
 
         return final_result
     
@@ -488,6 +492,24 @@ class Orchestrator:
             sections.append(f"## 集成要点\n{integration_notes}\n")
 
         self._shared_context = "\n".join(sections)
+
+        # SessionService: 写结构化 state + event
+        if self._session_service and self._current_svc_session_id:
+            self._session_service.update_state(self._current_svc_session_id, {
+                "plan": {
+                    "analysis": analysis[:500],
+                    "api_contract": api_contract[:2000],
+                    "tech_stack": tech_stack[:500],
+                    "subtasks": [
+                        {"agent_type": st.get("agent_type"), "description": st.get("description", "")[:200]}
+                        for st in subtasks
+                    ],
+                }
+            })
+            self._session_service.append_event(self._current_svc_session_id, {
+                "type": "plan_created",
+                "subtask_count": len(subtasks),
+            })
 
         if self.task_manager:
             artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
@@ -534,6 +556,26 @@ class Orchestrator:
 
         dispatch_id = str(uuid.uuid4())[:8]
         self._dispatched[dispatch_id] = (agent_type, result)
+
+        # SessionService: append dispatch + completion events
+        if self._session_service and self._current_svc_session_id:
+            self._session_service.append_event(self._current_svc_session_id, {
+                "type": "agent_dispatched",
+                "agent_type": agent_type,
+                "dispatch_id": dispatch_id,
+            })
+            self._session_service.append_event(self._current_svc_session_id, {
+                "type": "agent_completed",
+                "agent_type": agent_type,
+                "dispatch_id": dispatch_id,
+                "success": result.success,
+                "artifacts": result.artifacts or [],
+                "error": (result.error or "")[:200],
+            })
+            if result.success and result.artifacts:
+                self._session_service.update_state(self._current_svc_session_id, {
+                    "artifacts": {agent_type.split("-")[0]: result.artifacts}
+                })
 
         state = "completed" if result.success else "failed"
         text = result.output or result.error or "无响应"
@@ -686,5 +728,12 @@ class Orchestrator:
                     "\n\n⚠️ 警告：已分派 Agent 但找不到工作目录。"
                     "产出物可能未正确保存。"
                 )
+
+        # SessionService: append finalized event
+        if self._session_service and self._current_svc_session_id:
+            self._session_service.append_event(self._current_svc_session_id, {
+                "type": "finalized",
+                "summary": summary[:500],
+            })
 
         return f"[FINALIZE] 任务已完成。摘要：\n{summary}{artifact_warning}"

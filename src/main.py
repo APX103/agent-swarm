@@ -19,6 +19,7 @@ from src.dispatcher.dispatcher import Dispatcher, DispatcherConfig
 from src.dispatcher.result_cache import ResultCache
 from src.orchestrator.resolver import OrchestratorResolver
 from src.session.manager import SessionManager
+from src.session.service import SessionService
 from src.observability.trace import TraceIdFilter
 from src.registry.sweeper import health_sweep_loop
 
@@ -52,6 +53,10 @@ async def _lifespan(app: FastAPI):
     # 1. 初始化持久化 + 任务管理器
     from src.storage.sqlite_store import SQLiteStore
     store = SQLiteStore(settings.storage.shared_output_base + "/swarm.db")
+    session_svc = SessionService(
+        settings.storage.shared_output_base + "/swarm.db",
+        settings.storage.shared_output_base,
+    )
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
         store=store,
@@ -113,13 +118,14 @@ async def _lifespan(app: FastAPI):
         pool_manager=pool_manager,
         task_manager=task_manager,
         dispatcher=dispatcher,
+        session_service=session_svc,
     )
     logger.info("Orchestrator initialized (unified dispatcher wired)")
 
     # 7. 组装 session 管理器 + 可插拔编排器解析器并注入依赖
     session_mgr = SessionManager(settings.storage.shared_output_base, store=store)
     resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
-    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr)
+    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr, session_svc=session_svc)
     
     logger.info("🐝 Agent Swarm ready!")
     

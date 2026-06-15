@@ -30,6 +30,7 @@ task_manager: Optional[TaskManager] = None
 pool_manager: Optional[ContainerPoolManager] = None
 orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
 session_manager = None  # SessionManager for multi-turn sessions
+_session_service = None  # SessionService for structured state + events
 
 # Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
 _idempotency_index: dict[str, str] = {}
@@ -38,13 +39,14 @@ _idempotency_index: dict[str, str] = {}
 dead_letters = DeadLetterStore()
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None):
-    global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager
+def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None, session_svc=None):
+    global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager, _session_service
     orchestrator = orch
     task_manager = tm
     pool_manager = pool
     orchestrator_resolver = resolver
     session_manager = sess_mgr
+    _session_service = session_svc
 
 
 # Per-tenant concurrency cap: backpressure so one tenant can't saturate the workers.
@@ -102,6 +104,11 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
     # session: 复用已有（同 work folder + 对话历史）或新建
     tenant = req.tenant_id or "default"
     sess = session_manager.get_or_create(req.session_id, tenant) if session_manager else None
+
+    # SessionService: 结构化 state + events（与 SessionManager 并存）
+    if _session_service and sess:
+        _session_service.get_or_create_with_id(sess.session_id, tenant)
+        _session_service.append_event(sess.session_id, {"type": "user_message", "text": req.message})
 
     # 创建任务
     task = await task_manager.create_task(

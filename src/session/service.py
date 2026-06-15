@@ -49,6 +49,17 @@ class SessionService:
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def get_or_create_with_id(self, session_id: str, tenant_id: str = "default") -> Session:
+        """Get existing session or create with the given session_id (for alignment with SessionManager)."""
+        existing = self.get_session(session_id)
+        if existing:
+            return existing
+        work_dir = str(self._base / "tenants" / tenant_id / "sessions" / session_id)
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        sess = Session(session_id=session_id, tenant_id=tenant_id, work_dir=work_dir)
+        self._save(sess)
+        return sess
+
     def create_session(self, tenant_id: str = "default") -> Session:
         """Create a fresh session with empty state + events."""
         sid = str(uuid.uuid4())[:8]
