@@ -78,3 +78,9 @@ dispatcher:
   dispatch_timeout: 300          # 单次 dispatch 超时（秒）
   max_concurrent: 8              # 全局并发上限（背压）
   health_precheck: true          # dispatch 前健康预检
+
+# API Key 保护（可选，内网防误调用。设了之后 /api/v1/ 路由需要 X-API-Key header）
+# api_key: "your-secret-key"     # 或环境变量 SWARM_API_KEY
+
+# Worker 开发模式（可选，volume 挂载 src/agents 到容器，改 worker 代码不用 rebuild 镜像）
+# worker_dev_mode: false         # 或环境变量 WORKER_DEV_MODE=true

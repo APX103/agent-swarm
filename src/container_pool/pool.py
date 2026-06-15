@@ -54,6 +54,7 @@ class ContainerPoolManager:
         self.mem_limit = settings.container_pool.mem_limit if settings else "512m"
         self.cpu_limit = settings.container_pool.cpu_limit if settings else 0.5
         self.worker_host = settings.container_pool.worker_host if settings else "localhost"
+        self.worker_dev_mode = settings.container_pool.worker_dev_mode if settings else False
 
         self.shared_output_base = settings.storage.shared_output_base if settings else "/home/apx103/work/swarm/shared_output"
         
@@ -150,6 +151,10 @@ class ContainerPoolManager:
                 volumes={
                     self.shared_output_base: {"bind": "/workspace/artifacts", "mode": "rw"},
                     config_file: {"bind": "/etc/swarm/config.json", "mode": "ro"},
+                } if not self.worker_dev_mode else {
+                    self.shared_output_base: {"bind": "/workspace/artifacts", "mode": "rw"},
+                    config_file: {"bind": "/etc/swarm/config.json", "mode": "ro"},
+                    str(Path(__file__).parent.parent.parent / "src" / "agents"): {"bind": "/app/agents", "mode": "rw"},
                 },
                 mem_limit=self.mem_limit,
                 nano_cpus=int(self.cpu_limit * 1e9),

@@ -80,6 +80,28 @@ async def _lifespan(app: FastAPI):
     adapter_manager = AdapterManager()
     gateway.set_deps(registry, adapter_manager)
     logger.info("AdapterManager initialized")
+
+    # 3b. 声明式 Agent 注册 (agents/*.yaml)
+    _agents_dir = BASE_DIR / "agents"
+    if _agents_dir.exists():
+        import yaml as _yaml
+        from src.adapters.adapter_manager import create_adapter as _create_adapter
+        for _f in sorted(_agents_dir.glob("*.yaml")):
+            try:
+                _data = _yaml.safe_load(_f.read_text())
+                _proto = _data.get("protocol", "http")
+                _agent_id = await registry.register({
+                    "name": _data["name"], "endpoint": _data["endpoint"],
+                    "protocol": _proto, "skills": _data.get("skills", []),
+                })
+                if _proto in ("openai", "cli", "mcp", "a2a"):
+                    _info = {"protocol": _proto}
+                    _info["base_url" if _proto in ("openai", "a2a") else "server_url" if _proto == "mcp" else "command"] = _data["endpoint"]
+                    _info.update({k: v for k, v in _data.items() if k not in ("name", "endpoint", "protocol", "skills")})
+                    adapter_manager.register(_agent_id, _create_adapter(_info))
+                logger.info("Registered declared agent: %s (%s)", _data.get("name"), _f.name)
+            except Exception as _e:
+                logger.warning("Failed to register agent from %s: %s", _f.name, _e)
     
     # 4. 初始化容器池
     pool_manager = ContainerPoolManager(settings=settings)

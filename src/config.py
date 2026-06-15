@@ -35,6 +35,7 @@ class ContainerPoolConfig:
     cpu_limit: float = 0.5
     worker_host: str = "localhost"  # host where worker ports are published (host.docker.internal when orchestrator runs in a container)
     pool_config_dir: str = ""  # host-visible dir for per-container config.json (container mode must set this to a host path)
+    worker_dev_mode: bool = False  # dev: volume-mount src/agents into workers (hot reload, no rebuild)
 
 
 @dataclass
@@ -180,6 +181,8 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
             pass
     if os.environ.get("CONTAINER_IMAGE_NAME"):
         settings.container_pool.image_name = os.environ["CONTAINER_IMAGE_NAME"]
+    if os.environ.get("WORKER_DEV_MODE", "").lower() in ("true", "1", "yes"):
+        settings.container_pool.worker_dev_mode = True
     if os.environ.get("CONTAINER_WORKER_HOST"):
         settings.container_pool.worker_host = os.environ["CONTAINER_WORKER_HOST"]
     if os.environ.get("POOL_CONFIG_DIR"):

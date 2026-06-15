@@ -37,6 +37,7 @@ class MockSettings:
         mem_limit = "256m"
         cpu_limit = 0.5
         worker_host = "localhost"
+        worker_dev_mode = False
 
     class Storage:
         shared_output_base = "/tmp/swarm-test/shared_output"
