@@ -55,3 +55,38 @@ def test_tenant_isolation(tmp_path):
 def test_get_unknown_returns_none(tmp_path):
     sm = SessionManager(str(tmp_path))
     assert sm.get("nonexistent") is None
+
+
+# ── disk persistence (survive restart) ─────────────────────────────────────────
+
+
+def test_save_persists_context_to_disk(tmp_path):
+    sm = SessionManager(str(tmp_path))
+    s = sm.get_or_create("persist-test", "default")
+    s.messages = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
+    s.shared_context = "THE PLAN"
+    sm.save(s)
+    ctx_file = s.work_dir / "_session" / "context.json"
+    assert ctx_file.exists()
+
+
+def test_restore_from_disk_after_restart(tmp_path):
+    """Simulate process restart: new SessionManager, same base dir → context restored."""
+    sm1 = SessionManager(str(tmp_path))
+    s1 = sm1.get_or_create("resume-test", "default")
+    s1.messages = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "done"}]
+    s1.shared_context = "PLAN"
+    sm1.save(s1)
+
+    sm2 = SessionManager(str(tmp_path))  # fresh instance = "restart"
+    s2 = sm2.get_or_create("resume-test", "default")
+    assert s2.messages == s1.messages
+    assert s2.shared_context == "PLAN"
+    assert s2.work_dir == s1.work_dir
+
+
+def test_unknown_session_no_disk_file_creates_new(tmp_path):
+    sm = SessionManager(str(tmp_path))
+    s = sm.get_or_create("never-saved", "default")
+    assert s.messages == []
+    assert s.shared_context == ""
