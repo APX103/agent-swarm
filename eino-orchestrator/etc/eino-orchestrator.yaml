@@ -1,0 +1,16 @@
+Name: eino-orchestrator
+Host: 0.0.0.0
+Port: 9020
+# go-zero 默认 1s 超时会把 ReAct loop（调 GLM + 调 worker 要 60s+）打断成 503。
+# 关掉慢调用脱落，超时拉到 10 分钟。
+Timeout: 600000
+MaxConns: 50
+
+GLM:
+  BaseURL: https://open.bigmodel.cn/api/coding/paas/v4
+  APIKey: 349dfda0290b46a3837c4d909dc6a912.EIf11xlcpbFTU6eo
+  Model: glm-4.7
+  Timeout: 120s
+
+Swarm:
+  APIBase: http://localhost:9000
