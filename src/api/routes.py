@@ -6,6 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, Header
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from src.api.models import (
     ChatRequest, TaskResponse, ArtifactInfo, AgentInfo, HealthResponse,
@@ -31,6 +32,7 @@ pool_manager: Optional[ContainerPoolManager] = None
 orchestrator_resolver = None  # pluggable orchestrator selector (Round 3)
 session_manager = None  # SessionManager for multi-turn sessions
 _session_service = None  # SessionService for structured state + events
+_dispatcher = None  # unified dispatcher (for internal dispatch endpoint)
 
 # Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
 _idempotency_index: dict[str, str] = {}
@@ -39,12 +41,13 @@ _idempotency_index: dict[str, str] = {}
 dead_letters = DeadLetterStore()
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None, session_svc=None):
-    global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager, _session_service
+def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None, session_svc=None, dispatcher=None):
+    global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager, _session_service, _dispatcher
     orchestrator = orch
     task_manager = tm
     pool_manager = pool
     orchestrator_resolver = resolver
+    _dispatcher = dispatcher
     session_manager = sess_mgr
     _session_service = session_svc
 
@@ -315,6 +318,49 @@ async def get_session_events(session_id: str):
     if sess is None:
         raise HTTPException(404, f"Session {session_id} not found")
     return {"session_id": session_id, "events": sess.events, "state": sess.state}
+
+
+# ── internal dispatch endpoint（给外部 orchestrator 如 eino 用）─────────────
+# 外部 orchestrator 通过这个端点让 Swarm 调度一个子任务到指定的 agent_type。
+# 走完整的 dispatcher 路径（pool checkout + worker 激活 + 执行 + 归还），
+# 产物落到 shared_dir 指定的目录。
+
+
+class InternalDispatchRequest(BaseModel):
+    agent_type: str
+    task: str
+    shared_dir: Optional[str] = None  # worker 产物目录（宿主路径）
+    tenant_id: str = "default"
+
+
+@router.post("/api/internal/dispatch")
+async def internal_dispatch(req: InternalDispatchRequest):
+    """内部 dispatch：让 Swarm 的 dispatcher 把任务发给指定 agent_type 的 worker。
+
+    供外部 orchestrator（如 eino）调用——它不直连 worker（worker 处于 warm 未激活态），
+    而是走这个端点，享受 pool checkout + 激活 + 执行 + 归还的完整链路。
+    """
+    if _dispatcher is None:
+        raise HTTPException(503, "Dispatcher not available")
+    from src.dispatcher.base import DispatchRequest
+
+    request = DispatchRequest(
+        agent_type=req.agent_type,
+        task=req.task,
+        context={"shared_dir": req.shared_dir} if req.shared_dir else {},
+    )
+    try:
+        result = await _dispatcher.dispatch(request)
+    except Exception as e:
+        logger.error("internal dispatch failed: %s", e, exc_info=True)
+        raise HTTPException(500, str(e))
+
+    return {
+        "success": result.success,
+        "output": result.output,
+        "error": result.error,
+        "artifacts": result.artifacts,
+    }
 
 
 @router.get("/api/v1/metrics")

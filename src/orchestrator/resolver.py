@@ -42,7 +42,7 @@ class OrchestratorResolver:
             if external is not None:
                 try:
                     return await external.execute(
-                        task_id, tenant_id, user_message, event_callback
+                        task_id, tenant_id, user_message, event_callback, session
                     )
                 except Exception as e:
                     logger.warning("External orchestrator failed: %s", e, exc_info=True)

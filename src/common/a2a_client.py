@@ -64,24 +64,31 @@ class A2AClient:
             logger.error(f"Failed to get agent card from {self.base_url}: {e}")
         return None
     
-    async def send_message(self, message: A2AMessage, 
-                          blocking: bool = True) -> Optional[A2ATask]:
+    async def send_message(self, message: A2AMessage,
+                          blocking: bool = True,
+                          configuration: dict = None) -> Optional[A2ATask]:
         """发送消息给 Agent
-        
+
         Args:
             message: A2A 消息
             blocking: 是否阻塞等待完成
-        
+            configuration: 额外的 configuration 字段（和 blocking 合并），如
+                           {"shared_dir": "...", "task_id": "..."} 传给外部 orchestrator
+
         Returns:
-            A2A Task 对象
+            A2ATask 对象
         """
+        config = {"blocking": blocking}
+        if configuration:
+            config.update(configuration)
+
         request = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "message/send",
             "params": {
                 "message": message.to_dict(),
-                "configuration": {"blocking": blocking},
+                "configuration": config,
             }
         }
         

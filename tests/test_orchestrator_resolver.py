@@ -128,14 +128,17 @@ async def test_external_no_endpoint_falls_back():
 async def test_external_orchestrator_returns_summary(monkeypatch):
     from src.orchestrator.external import ExternalOrchestrator
 
-    fake_task = MagicMock(message="SCHED-OK", state="completed")
+    fake_task = MagicMock(message="SCHED-OK", state="completed", task_id="t1")
 
     class FakeClient:
         def __init__(self, base_url, timeout=600.0):
             self.base_url = base_url
 
-        async def send_message(self, msg, blocking=True):
+        async def send_message(self, msg, blocking=True, configuration=None):
             return fake_task
+
+        async def poll_task(self, task_id, interval=2.0, timeout=600.0):
+            yield fake_task
 
         async def close(self):
             pass
@@ -153,7 +156,7 @@ async def test_external_orchestrator_raises_on_no_task(monkeypatch):
         def __init__(self, base_url, timeout=600.0):
             pass
 
-        async def send_message(self, msg, blocking=True):
+        async def send_message(self, msg, blocking=True, configuration=None):
             return None
 
         async def close(self):
