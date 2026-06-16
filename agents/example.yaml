@@ -1,5 +1,0 @@
-# 取消注释以下行即可启用这个声明式 Agent
-# name: example-agent
-# endpoint: http://localhost:8000
-# protocol: openai
-# skills: [demo]
