@@ -28,11 +28,18 @@ class SessionService:
     def __init__(self, db_path: str | Path, base_dir: str | Path) -> None:
         self._db_path = str(db_path)
         self._base = Path(base_dir)
+        self._locks: dict[str, asyncio.Lock] = {}
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         # Schema init runs once at construction (before the loop is hot); cheap
         # and idempotent, so we keep it synchronous rather than forcing callers
         # to await __init__.
         self._init_table()
+
+    def _get_lock(self, session_id: str) -> asyncio.Lock:
+        """Per-session lock to serialize read-modify-write (prevent lost updates)."""
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
 
     # ── low-level sync sqlite helpers (always run in a worker thread) ─────────
 
@@ -115,21 +122,31 @@ class SessionService:
         return [self._row_to_session(row) for row in rows]
 
     async def append_event(self, session_id: str, event: dict[str, Any]) -> Optional[Session]:
-        """Append an event to the session's log + persist. Returns updated session."""
-        sess = await self.get_session(session_id)
-        if sess is None:
-            return None
-        event.setdefault("timestamp", time.time())
-        sess.events.append(event)
-        await self._save(sess)
-        return sess
+        """Append an event to the session's log + persist. Returns updated session.
+
+        Serialized per-session to prevent concurrent append_event calls from
+        losing events (read-modify-write under lock).
+        """
+        async with self._get_lock(session_id):
+            sess = await self.get_session(session_id)
+            if sess is None:
+                return None
+            event.setdefault("timestamp", time.time())
+            sess.events.append(event)
+            await self._save(sess)
+            return sess
 
     async def update_state(self, session_id: str, delta: dict[str, Any]) -> Optional[Session]:
-        """Deep-merge delta into session.state + persist. Returns updated session."""
-        sess = await self.get_session(session_id)
-        if sess is None:
-            return None
-        _deep_merge(sess.state, delta)
+        """Deep-merge delta into session.state + persist. Returns updated session.
+
+        Serialized per-session to prevent concurrent update_state calls from
+        clobbering each other's writes.
+        """
+        async with self._get_lock(session_id):
+            sess = await self.get_session(session_id)
+            if sess is None:
+                return None
+            _deep_merge(sess.state, delta)
         await self._save(sess)
         return sess
 

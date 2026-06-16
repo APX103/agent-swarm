@@ -275,8 +275,12 @@ class ContainerPoolManager:
                 pass
             await asyncio.sleep(2)
         else:
-            logger.warning(f"Worker {idle.container_name} did not become ready after {max_wait}s")
-        
+            # Worker didn't become ready in time. In degraded/mock mode there's no
+            # HTTP server so this always times out — we still return the container
+            # (the LLM call may work via direct A2A). Real readiness failure is
+            # caught downstream when the dispatch fails and the breaker trips.
+            logger.warning(f"Worker {idle.container_name} did not become ready after {max_wait}s (continuing anyway)")
+
         return idle
     
     async def return_container(self, container_id: str):
@@ -286,11 +290,14 @@ class ContainerPoolManager:
             if not container:
                 logger.warning(f"Container {container_id} not in pool")
                 return
-            
+
             container.state = ContainerState.IDLE
             container.assigned_task_id = None
             container.assigned_role = None
-            
+
+            # 清理容器内上个任务的产物文件（防止跨任务串扰）
+            await self._clean_container_artifacts(container)
+
             # 清理配置文件：必须保留原 inode，因为 Docker bind mount 在运行中的
             # worker 容器内仍指向同一个 inode。直接 unlink 会导致容器里看到的是被
             # 删除的旧文件，后续 checkout 写入的新文件无法被 worker 读取。
@@ -299,13 +306,28 @@ class ContainerPoolManager:
                     Path(container.config_file).write_text("{}")
                 except Exception:
                     pass
-            
+
             # 检查是否需要回收
             if container.use_count >= self.max_uses:
                 logger.info(f"Recycling container {container.container_name} (uses={container.use_count})")
                 await self._recycle_container(container)
-        
+
         logger.info(f"Returned container {container.container_name} to pool")
+
+    async def _clean_container_artifacts(self, container: PooledContainer):
+        """清理容器内上个任务写入的产物文件，防止跨任务串扰。
+
+        通过 docker exec 删除容器内 /workspace/artifacts 下的内容（安全：
+        只影响这个容器的隔离文件系统，不影响宿主机共享盘）。
+        """
+        try:
+            import docker as _docker
+            client = _docker.from_env()
+            c = client.containers.get(container.container_name)
+            c.exec_run("sh -c 'rm -rf /workspace/artifacts/* 2>/dev/null; mkdir -p /workspace/artifacts'")
+        except Exception:
+            # 容器可能不存在（mock 模式）——安全跳过
+            logger.debug("Skip artifact cleanup for %s (no docker)", container.container_name)
     
     async def _recycle_container(self, container: PooledContainer):
         """回收并重建容器"""

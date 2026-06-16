@@ -24,11 +24,13 @@ class ResultCache:
         self._store: dict[str, tuple[DispatchResult, float]] = {}
 
     @staticmethod
-    def _key(agent_type: str, task: str) -> str:
-        return f"{agent_type}:{hash(task)}"
+    def _key(agent_type: str, task: str, task_id: str = "") -> str:
+        # Include task_id in the key so identical prompts from different tasks
+        # don't return each other's cached results.
+        return f"{agent_type}:{hash(task)}:{task_id}"
 
-    def get(self, agent_type: str, task: str) -> Optional[DispatchResult]:
-        key = self._key(agent_type, task)
+    def get(self, agent_type: str, task: str, task_id: str = "") -> Optional[DispatchResult]:
+        key = self._key(agent_type, task, task_id)
         entry = self._store.get(key)
         if entry is None:
             return None
@@ -38,11 +40,11 @@ class ResultCache:
             return None
         return result
 
-    def put(self, agent_type: str, task: str, result: DispatchResult) -> None:
+    def put(self, agent_type: str, task: str, result: DispatchResult, task_id: str = "") -> None:
         if not result.success:
             return  # never cache failures
         if len(self._store) >= self._max_size:
             # evict the entry with the nearest expiry
             oldest_key = min(self._store, key=lambda k: self._store[k][1])
             self._store.pop(oldest_key, None)
-        self._store[self._key(agent_type, task)] = (result, time.time() + self._ttl)
+        self._store[self._key(agent_type, task, task_id)] = (result, time.time() + self._ttl)

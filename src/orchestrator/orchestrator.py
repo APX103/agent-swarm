@@ -74,14 +74,16 @@ Worker 完成后：
 
 
 def review_artifacts(dispatched_types: list[str], artifacts_dir) -> dict:
-    """检查每个已分派 Agent 是否在自己的角色子目录下产出了文件。
+    """检查每个已分派 Agent 是否在自己的角色子目录下产出了**有效**文件。
 
     角色子目录取 agent_type 的第一段（frontend-ux-pro -> frontend），与 worker 写盘一致。
-    返回 {'passed': bool, 'missing': [...], 'per_agent': {agent_type: file_count}}。
+    "有效" = 文件存在且内容非空（防垃圾代码通过审查）。
+    返回 {'passed': bool, 'missing': [...], 'per_agent': {agent_type: file_count}, 'empty': [...]}。
     """
     artifacts_dir = Path(artifacts_dir)
     per_agent: dict[str, int] = {}
     missing: list[str] = []
+    empty: list[str] = []
     for agent_type in dispatched_types:
         sub = agent_type.split("-")[0]
         d = artifacts_dir / sub
@@ -89,7 +91,13 @@ def review_artifacts(dispatched_types: list[str], artifacts_dir) -> dict:
         per_agent[agent_type] = len(files)
         if not files:
             missing.append(agent_type)
-    return {"passed": not missing, "missing": missing, "per_agent": per_agent}
+            continue
+        # 检查是否有至少一个非空文件（全是空文件视为未完成）
+        non_empty = [f for f in files if f.stat().st_size > 0]
+        if not non_empty:
+            empty.append(agent_type)
+    passed = not missing and not empty
+    return {"passed": passed, "missing": missing, "empty": empty, "per_agent": per_agent}
 
 
 class Orchestrator:
@@ -332,13 +340,36 @@ class Orchestrator:
         self._current_session_work_dir = str(session.work_dir) if session else None
         self._current_svc_session_id = session.session_id if (session and self._session_service) else None
 
-        if session and session.messages:
-            # resume: 加载历史 + 追加新消息（不清零）
-            self._messages = session.messages
-            self._shared_context = session.shared_context
-            self._messages.append({"role": "user", "content": user_message})
+        if session:
+            # resume: 恢复历史 + shared_context（即使 messages 为空也不丢上下文）
+            self._shared_context = session.shared_context or ""
+            # P0-1 fix: 从 SessionService 读回上次的 state（plan / artifacts），补到 shared_context
+            if self._session_service and self._current_svc_session_id:
+                try:
+                    prev_state = await self._session_service.get_session(self._current_svc_session_id)
+                    if prev_state and prev_state.state:
+                        plan = prev_state.state.get("plan")
+                        if plan and isinstance(plan, dict):
+                            plan_summary = plan.get("api_contract") or plan.get("analysis") or ""
+                            if plan_summary and plan_summary not in self._shared_context:
+                                self._shared_context = (
+                                    f"## 上轮计划回顾\n{plan_summary}\n\n" + self._shared_context
+                                )
+                        last_result = prev_state.state.get("last_result")
+                        if last_result and last_result not in self._shared_context:
+                            self._shared_context += f"\n\n## 上轮结果\n{last_result[:500]}"
+                except Exception:
+                    logger.debug("Failed to read previous session state for resume", exc_info=True)
+            if session.messages:
+                self._messages = session.messages
+                self._messages.append({"role": "user", "content": user_message})
+            else:
+                self._messages = [
+                    {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ]
         else:
-            # 新 session（或无 session）：从头开始
+            # 无 session：从头开始
             self._shared_context = ""
             self._messages = [
                 {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},

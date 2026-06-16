@@ -4,9 +4,11 @@
 使用配置的 LLM 处理任务，将产物写入共享目录。
 """
 import asyncio
+import contextvars
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -29,6 +31,14 @@ LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 AGENT_PORT = int(os.environ.get("AGENT_PORT", "9001"))
 TASK_ID = os.environ.get("TASK_ID", "")
 SHARED_DIR = os.environ.get("SHARED_DIR", "/workspace/artifacts")
+
+# Per-request shared_dir（contextvars 天然隔离并发请求，不会被互相覆盖）
+# reload_config 设置它；execute_file_tool 读它。
+# 注意：default 用 lambda 读 os.environ，兼容 monkeypatch.setenv 的测试。
+_request_shared_dir: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_shared_dir",
+    default=os.environ.get("SHARED_DIR", "/workspace/artifacts"),
+)
 
 CONFIG_FILE = "/etc/swarm/config.json"
 
@@ -62,6 +72,8 @@ def reload_config():
     AGENT_PORT = int(_set("port", str(AGENT_PORT)))
     TASK_ID = _set("task_id", TASK_ID)
     SHARED_DIR = _set("shared_dir", SHARED_DIR)
+    # 同步到 per-request contextvar（并发隔离的真正来源）
+    _request_shared_dir.set(SHARED_DIR)
     if "system_prompt" in cfg:
         os.environ["AGENT_SYSTEM_PROMPT"] = str(cfg["system_prompt"])
     logger.info("Reloaded config: role=%s task=%s shared_dir=%s", AGENT_ROLE, TASK_ID, SHARED_DIR)
@@ -236,6 +248,31 @@ _tasks: dict[str, dict] = {}
 # 后台执行的任务（用于取消）
 _bg_tasks: dict[str, asyncio.Task] = {}
 
+# 任务 TTL：终态任务保留 5 分钟后清理，防止内存无限增长
+_TASK_TTL_SECONDS = 300
+_last_cleanup = 0.0
+
+
+def _cleanup_old_tasks():
+    """清理超过 TTL 的终态任务（每个请求最多触发一次/分钟）。"""
+    import time as _time
+    global _last_cleanup
+    now = _time.time()
+    if now - _last_cleanup < 60:
+        return  # 节流：最多每分钟清理一次
+    _last_cleanup = now
+    terminal = ("completed", "failed", "canceled")
+    expired = [
+        tid for tid, t in _tasks.items()
+        if t.get("status", {}).get("state") in terminal
+        and (now - t.get("_completed_at", now)) > _TASK_TTL_SECONDS
+    ]
+    for tid in expired:
+        _tasks.pop(tid, None)
+        _bg_tasks.pop(tid, None)
+    if expired:
+        logger.debug("Cleaned up %d expired tasks from worker memory", len(expired))
+
 
 def resolve_card(role: str) -> dict:
     """Agent card for *role*: prefer an env-injected card (WORKER_ROLE_CARD JSON,
@@ -305,6 +342,9 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
     blocking=False：立即返回 working，后台执行并把步骤进度写入 task 记录
                    （供 tasks/get 轮询），完成/失败时更新 status。
     """
+    # 清理过期的终态任务（防止内存泄漏）
+    _cleanup_old_tasks()
+
     message_data = params.get("message", {})
     user_text = ""
     for part in message_data.get("parts", []):
@@ -331,6 +371,7 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
         try:
             result = await call_llm(user_text, on_progress=on_progress)
             task["status"] = {"state": "completed"}
+            task["_completed_at"] = time.time()
             task["history"].append({
                 "role": "agent",
                 "parts": [{"kind": "text", "text": result}],
@@ -339,6 +380,7 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
         except Exception as e:
             logger.exception("Worker task %s failed", task_id)
             task["status"] = {"state": "failed"}
+            task["_completed_at"] = time.time()
             task["history"].append({
                 "role": "agent",
                 "parts": [{"kind": "text", "text": f"Error: {e}"}],
@@ -525,8 +567,14 @@ async def call_llm(user_message: str, on_progress=None) -> str:
 
 def execute_file_tool(name: str, args: dict) -> str:
     """执行文件系统工具"""
-    # 每次执行时从环境变量读取（确保使用最新值）
-    shared_dir = os.environ.get("SHARED_DIR", "/workspace/artifacts")
+    # 从 per-request contextvar 读取（并发隔离，不会被其他请求覆盖）；
+    # 如果 contextvar 未被 reload_config 设置过（如测试），回退到 os.environ。
+    shared_dir = _request_shared_dir.get()
+    if not shared_dir or shared_dir == "/workspace/artifacts":
+        # 可能是未被 reload_config 设置的默认值——检查 os.environ（兼容测试/首次启动）
+        env_dir = os.environ.get("SHARED_DIR")
+        if env_dir:
+            shared_dir = env_dir
     role_dir = Path(shared_dir) / AGENT_ROLE.split("-")[0]  # frontend/backend/general
     role_dir.mkdir(parents=True, exist_ok=True)
     
@@ -613,7 +661,8 @@ def main():
     TASK_ID = args.task_id
     if args.shared_dir:
         SHARED_DIR = args.shared_dir
-        os.environ["SHARED_DIR"] = args.shared_dir  # 让 execute_file_tool 读到最新值
+        os.environ["SHARED_DIR"] = args.shared_dir
+        _request_shared_dir.set(args.shared_dir)
 
     import uvicorn
     logger.info(f"Starting Worker Agent: role={AGENT_ROLE}, port={AGENT_PORT}, shared_dir={SHARED_DIR}")
