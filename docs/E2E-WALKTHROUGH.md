@@ -12,6 +12,7 @@
 - Python 3.12+（`python3 --version`）
 - Go 1.21+（如果要跑 eino-agent）（`go version`）
 - 网络能访问 `https://open.bigmodel.cn`（GLM API）
+- Redis（Agent 注册中心）
 
 ---
 

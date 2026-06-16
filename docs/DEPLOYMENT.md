@@ -93,8 +93,9 @@ services:
     ports: ["9000:9000"]
     volumes:
       - ./shared_output:/workspace/shared_output
-      - ./agents:/app/agents          # 声明式 Agent 配置（启动自动注册）
-      - ./web:/app/web                # Web UI 静态文件
+      - ./agents:/app/agents          # 声明式 Agent 配置（启动自动注册，endpoint 去重）
+      - ./web:/app/web                # 聊天 UI 静态文件
+      - ./dashboard:/app/dashboard    # 监控台静态文件
       - /var/run/docker.sock:/var/run/docker.sock   # 要管 Docker 容器的话
     environment:
       - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL}
@@ -102,6 +103,7 @@ services:
       - LLM_DEFAULT_API_KEY=${LLM_DEFAULT_API_KEY}
       - SHARED_OUTPUT_BASE=/workspace/shared_output
       - REDIS_URL=redis://redis:6379
+      - CONTAINER_POOL_SIZE=${CONTAINER_POOL_SIZE:-5}
       - SWARM_API_KEY=${SWARM_API_KEY:-}
     depends_on: [redis]
     restart: unless-stopped
