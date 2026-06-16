@@ -92,6 +92,28 @@ class SessionService:
                 "SELECT * FROM sessions_v2 WHERE session_id=?", (session_id,)
             ).fetchone()
 
+    async def list_sessions(
+        self, tenant_id: Optional[str] = None, limit: int = 100
+    ) -> list[Session]:
+        """List sessions from SQLite, newest first."""
+        return await asyncio.to_thread(self._list_sessions_sync, tenant_id, limit)
+
+    def _list_sessions_sync(
+        self, tenant_id: Optional[str], limit: int
+    ) -> list[Session]:
+        with self._conn() as c:
+            if tenant_id:
+                rows = c.execute(
+                    "SELECT * FROM sessions_v2 WHERE tenant_id=? ORDER BY created_at DESC LIMIT ?",
+                    (tenant_id, limit),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT * FROM sessions_v2 ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        return [self._row_to_session(row) for row in rows]
+
     async def append_event(self, session_id: str, event: dict[str, Any]) -> Optional[Session]:
         """Append an event to the session's log + persist. Returns updated session."""
         sess = await self.get_session(session_id)

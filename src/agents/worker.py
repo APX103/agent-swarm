@@ -30,6 +30,42 @@ AGENT_PORT = int(os.environ.get("AGENT_PORT", "9001"))
 TASK_ID = os.environ.get("TASK_ID", "")
 SHARED_DIR = os.environ.get("SHARED_DIR", "/workspace/artifacts")
 
+CONFIG_FILE = "/etc/swarm/config.json"
+
+
+def reload_config():
+    """热重载 /etc/swarm/config.json 到当前进程环境与模块全局变量。
+
+    容器池在每次 checkout 时会重写 config.json，但 Worker 进程是 warm 保留的，
+    因此每个请求到来前必须重新读取最新配置，尤其是 shared_dir 与 agent_role。
+    """
+    global AGENT_ROLE, LLM_MODEL, LLM_BASE_URL, LLM_API_KEY, AGENT_PORT, TASK_ID, SHARED_DIR
+    try:
+        if not Path(CONFIG_FILE).is_file():
+            return
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        logger.debug("reload_config failed: %s", e)
+        return
+
+    def _set(key: str, default: str) -> str:
+        val = cfg.get(key, default)
+        if val is not None:
+            os.environ[key.upper()] = str(val)
+        return str(val) if val is not None else default
+
+    AGENT_ROLE = _set("agent_role", AGENT_ROLE)
+    LLM_MODEL = _set("model", LLM_MODEL)
+    LLM_BASE_URL = _set("base_url", LLM_BASE_URL)
+    LLM_API_KEY = _set("api_key", LLM_API_KEY)
+    AGENT_PORT = int(_set("port", str(AGENT_PORT)))
+    TASK_ID = _set("task_id", TASK_ID)
+    SHARED_DIR = _set("shared_dir", SHARED_DIR)
+    if "system_prompt" in cfg:
+        os.environ["AGENT_SYSTEM_PROMPT"] = str(cfg["system_prompt"])
+    logger.info("Reloaded config: role=%s task=%s shared_dir=%s", AGENT_ROLE, TASK_ID, SHARED_DIR)
+
 
 # AgentCard 定义
 AGENT_CARDS = {
@@ -239,6 +275,7 @@ async def well_known_agent():
 @app.post("/")
 async def a2a_endpoint(request: Request):
     """A2A JSON-RPC 2.0 端点"""
+    reload_config()
     body = await request.json()
     
     method = body.get("method", "")

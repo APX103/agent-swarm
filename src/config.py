@@ -73,6 +73,13 @@ class RedisConfig:
 
 
 @dataclass
+class DashboardConfig:
+    enabled: bool = True
+    title: str = "Swarm Dashboard"
+    refresh_interval: int = 3
+
+
+@dataclass
 class Settings:
     server: ServerConfig = field(default_factory=ServerConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -86,6 +93,7 @@ class Settings:
     dispatcher: dict = field(default_factory=lambda: {
         "max_retries": 2, "dispatch_timeout": 300.0, "max_concurrent": 8, "health_precheck": True,
     })
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
 
 def load_settings(config_path: Optional[str] = None) -> Settings:
@@ -149,6 +157,14 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
             "max_concurrent": int(d.get("max_concurrent", 8)),
             "health_precheck": bool(d.get("health_precheck", True)),
         }
+
+    if "dashboard" in data:
+        d = data["dashboard"]
+        settings.dashboard = DashboardConfig(
+            enabled=bool(d.get("enabled", True)),
+            title=str(d.get("title", "Swarm Dashboard")),
+            refresh_interval=int(d.get("refresh_interval", 3)),
+        )
 
     # API key (optional, for /api/v1/ protection)
     if os.environ.get("SWARM_API_KEY"):

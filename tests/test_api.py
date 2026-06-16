@@ -67,6 +67,7 @@ def mock_task_manager():
         result="done",
         artifacts=["frontend/index.html"],
         work_dir=None,
+        session_id=None,
     ))
     tm.list_tasks = MagicMock(return_value=[])
     tm.get_artifacts_dir = MagicMock(return_value=None)

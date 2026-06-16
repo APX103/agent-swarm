@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Swarm Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">🐝</span>
+        <div>
+          <h1 id="dash-title">Swarm Dashboard</h1>
+          <span class="subtitle">Agent Swarm 监控台</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#/" class="nav-item active" data-route="home">
+          <span class="icon">📊</span> 概览
+        </a>
+        <a href="#/agents" class="nav-item" data-route="agents">
+          <span class="icon">🤖</span> Agents
+        </a>
+        <a href="#/sessions" class="nav-item" data-route="sessions">
+          <span class="icon">💬</span> Sessions
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status-line">
+          <span id="conn-dot" class="dot"></span>
+          <span id="conn-text">连接中...</span>
+        </div>
+        <div class="refresh-line">每 <span id="refresh-interval">3</span>s 刷新</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h2 id="page-title">概览</h2>
+        <div class="topbar-actions">
+          <button id="refresh-btn" class="btn btn-ghost" title="立即刷新">↻ 刷新</button>
+        </div>
+      </header>
+      <div id="content" class="content">
+        <!-- 动态内容 -->
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

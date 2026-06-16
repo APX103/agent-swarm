@@ -107,6 +107,7 @@ class TaskManager:
         if self._store and task:
             self._store.save_task(
                 task_id=task_id, tenant_id=task.tenant_id,
+                session_id=task.session_id,
                 status=status.value, result=task.result,
                 artifacts=task.artifacts,
                 work_dir=str(task.work_dir) if task.work_dir else None,
@@ -135,6 +136,7 @@ class TaskManager:
         if self._store and task:
             self._store.save_task(
                 task_id=task_id, tenant_id=task.tenant_id,
+                session_id=task.session_id,
                 status=TaskStatus.COMPLETED.value, result=result,
                 artifacts=task.artifacts,
                 work_dir=str(task.work_dir) if task.work_dir else None,
@@ -170,6 +172,7 @@ class TaskManager:
             result=data.get("result"),
             artifacts=data.get("artifacts", []),
             work_dir=Path(data["work_dir"]) if data.get("work_dir") else None,
+            session_id=data.get("session_id"),
         )
         if data.get("created_at"):
             try:

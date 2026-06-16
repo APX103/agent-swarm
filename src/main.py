@@ -209,7 +209,14 @@ def create_app(lifespan=None) -> FastAPI:
     if _web_dir.exists():
         from fastapi.staticfiles import StaticFiles
         app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
-    
+
+    # 挂载监控仪表板（dashboard/ 目录，通过配置开关控制）。
+    if settings.dashboard.enabled:
+        _dashboard_dir = Path(__file__).parent.parent / "dashboard"
+        if _dashboard_dir.exists():
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/dashboard", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")
+
     # API Key 保护 /api/v1/ 路由（内网防误调用）
     if settings.api_key:
         @app.middleware("http")

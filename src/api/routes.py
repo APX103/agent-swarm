@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query, Header
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.api.models import (
     ChatRequest, TaskResponse, ArtifactInfo, AgentInfo, HealthResponse,
@@ -191,6 +191,7 @@ async def get_task(task_id: str):
         status=task.status,
         message=task.result,
         artifacts=task.artifacts,
+        session_id=task.session_id,
     )
 
 
@@ -204,6 +205,7 @@ async def list_tasks(tenant_id: Optional[str] = None):
             status=t.status,
             message=t.result,
             artifacts=t.artifacts,
+            session_id=t.session_id,
         )
         for t in tasks
     ]
@@ -281,6 +283,16 @@ async def list_agents():
     ]
 
 
+@router.get("/api/dashboard/config")
+async def dashboard_config():
+    """返回监控仪表板的配置（标题、刷新间隔等）。"""
+    return {
+        "enabled": settings.dashboard.enabled,
+        "title": settings.dashboard.title,
+        "refresh_interval": settings.dashboard.refresh_interval,
+    }
+
+
 @router.get("/api/health", response_model=HealthResponse)
 async def health():
     """健康检查"""
@@ -309,6 +321,44 @@ async def list_dead_letters(limit: int = Query(50)):
     ]
 
 
+@router.get("/api/sessions")
+async def list_sessions(tenant_id: Optional[str] = None, limit: int = Query(50)):
+    """List sessions with summary info (newest first)."""
+    if _session_service is None:
+        raise HTTPException(503, "SessionService not available")
+    sessions = await _session_service.list_sessions(tenant_id, limit)
+    return [
+        {
+            "session_id": s.session_id,
+            "tenant_id": s.tenant_id,
+            "work_dir": s.work_dir,
+            "created_at": s.created_at,
+            "event_count": len(s.events),
+            "last_event_type": (s.events[-1].get("type") if s.events else None),
+            "last_event_at": (s.events[-1].get("timestamp") if s.events else None),
+        }
+        for s in sessions
+    ]
+
+
+@router.get("/api/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get session metadata + state + events."""
+    if _session_service is None:
+        raise HTTPException(503, "SessionService not available")
+    sess = await _session_service.get_session(session_id)
+    if sess is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return {
+        "session_id": session_id,
+        "tenant_id": sess.tenant_id,
+        "work_dir": sess.work_dir,
+        "created_at": sess.created_at,
+        "state": sess.state,
+        "events": sess.events,
+    }
+
+
 @router.get("/api/sessions/{session_id}/events")
 async def get_session_events(session_id: str):
     """Get structured state + event log for a session (audit trail)."""
@@ -318,6 +368,17 @@ async def get_session_events(session_id: str):
     if sess is None:
         raise HTTPException(404, f"Session {session_id} not found")
     return {"session_id": session_id, "events": sess.events, "state": sess.state}
+
+
+@router.get("/api/sessions/{session_id}/state")
+async def get_session_state(session_id: str):
+    """Get structured state for a session."""
+    if _session_service is None:
+        raise HTTPException(503, "SessionService not available")
+    sess = await _session_service.get_session(session_id)
+    if sess is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return {"session_id": session_id, "state": sess.state}
 
 
 # ── internal dispatch endpoint（给外部 orchestrator 如 eino 用）─────────────
@@ -330,6 +391,13 @@ class InternalDispatchRequest(BaseModel):
     agent_type: str
     task: str
     shared_dir: Optional[str] = None  # worker 产物目录（宿主路径）
+    tenant_id: str = "default"
+
+
+class InternalSessionEventRequest(BaseModel):
+    session_id: str
+    event_type: str
+    payload: dict = Field(default_factory=dict)
     tenant_id: str = "default"
 
 
@@ -361,6 +429,22 @@ async def internal_dispatch(req: InternalDispatchRequest):
         "error": result.error,
         "artifacts": result.artifacts,
     }
+
+
+@router.post("/api/internal/session-event")
+async def internal_session_event(req: InternalSessionEventRequest):
+    """外部 orchestrator 向 Swarm session 追加事件。
+
+    让外部编排器（如 eino-agent）也能把 dispatch、progress、complete 等关键步骤
+    写入 session 事件流，/dashboard 从而能看到完整调度过程。
+    """
+    if _session_service is None:
+        raise HTTPException(503, "SessionService not available")
+
+    await _session_service.get_or_create_with_id(req.session_id, req.tenant_id)
+    event = {"type": req.event_type, **req.payload}
+    await _session_service.append_event(req.session_id, event)
+    return {"ok": True}
 
 
 @router.get("/api/v1/metrics")
