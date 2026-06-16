@@ -20,6 +20,11 @@ class OrchestratorResolver:
     def __init__(self, builtin: OrchestratorBackend, config: OrchestratorConfig) -> None:
         self._builtin = builtin
         self._config = config
+        self._session_service = None  # 注入后供 external 路径写事件
+
+    def set_session_service(self, svc) -> None:
+        """注入 SessionService，供 external 路径写结构化事件。"""
+        self._session_service = svc
 
     def _build_external(self) -> Optional[OrchestratorBackend]:
         if not self._config.external_endpoint:
@@ -42,7 +47,8 @@ class OrchestratorResolver:
             if external is not None:
                 try:
                     return await external.execute(
-                        task_id, tenant_id, user_message, event_callback, session
+                        task_id, tenant_id, user_message, event_callback, session,
+                        session_service=self._session_service,
                     )
                 except Exception as e:
                     logger.warning("External orchestrator failed: %s", e, exc_info=True)
