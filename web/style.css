@@ -164,6 +164,8 @@ body {
 .artifact-item .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-item .fsize { color: var(--muted); font-size: 10px; flex-shrink: 0; }
 
+[hidden] { display: none !important; }
+
 .artifact-preview { position: absolute; right: 340px; top: 60px; bottom: 20px; width: 60%; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; box-shadow: var(--shadow); }
 .preview-header { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 #preview-frame { flex: 1; border: none; background: #fff; width: 100%; }
