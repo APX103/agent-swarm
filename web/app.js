@@ -56,7 +56,10 @@ function bindEvents() {
   els.chatInput.oninput = () => autoGrow(els.chatInput);
   els.cancelBtn.onclick = cancelTask;
   els.refreshArtifacts.onclick = () => state.currentTaskId && loadArtifacts(state.currentTaskId);
-  els.closePreview.onclick = () => { els.preview.hidden = true; };
+  els.closePreview.onclick = () => {
+    els.preview.hidden = true;
+    els.preview.style.display = "none";
+  };
 }
 
 function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 120) + "px"; }
@@ -349,9 +352,11 @@ async function previewArtifact(taskId, name) {
       els.previewFrame.srcdoc = `<pre style="padding:12px;font-family:monospace;font-size:12px;white-space:pre-wrap;background:#1e222b;color:#e6e9ef;margin:0;height:100vh;">${escapeHtml(data.content)}</pre>`;
     }
     els.preview.hidden = false;
+    els.preview.style.display = "flex";
   } catch (e) {
     els.previewFrame.srcdoc = `<pre>预览失败：${e}</pre>`;
     els.preview.hidden = false;
+    els.preview.style.display = "flex";
   }
 }
 
