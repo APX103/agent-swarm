@@ -25,13 +25,13 @@ class SQLiteStore:
         self._init_tables()
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self._path)
+        c = sqlite3.connect(self._path, timeout=10)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
         return c
 
     def _init_tables(self) -> None:
-        with self._conn() as c:
+        c = self._conn()
+        try:
             c.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -56,6 +56,9 @@ class SQLiteStore:
                 );
                 """
             )
+            c.commit()
+        finally:
+            c.close()
 
     # ── tasks ──────────────────────────────────────────────────────────────────
 

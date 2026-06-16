@@ -20,17 +20,16 @@ if [ "$WAIT_FOR_CONFIG" = "true" ]; then
     echo "[Worker] Configuration received, starting agent..."
 fi
 
-# 从配置文件或环境变量读取参数
+# 从配置文件或环境变量读取参数（用 .get() 兜底，防 KeyError 崩溃）
 if [ -s "$CONFIG_FILE" ]; then
-    export AGENT_ROLE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['agent_role'])")
-    export LLM_MODEL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['model'])")
-    export LLM_BASE_URL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['base_url'])")
-    export LLM_API_KEY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['api_key'])")
-    export AGENT_PORT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['port'])")
-    export TASK_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['task_id'])")
-    export ORCHESTRATOR_URL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE', errors='ignore')).get('orchestrator_url', ''))" 2>/dev/null || echo "")
-    export SHARED_DIR=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('shared_dir', '/workspace/artifacts'))")
-    export AGENT_SYSTEM_PROMPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('system_prompt', ''))" 2>/dev/null || echo "")
+    export AGENT_ROLE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('agent_role','general'))")
+    export LLM_MODEL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('model','glm-coding-plan'))")
+    export LLM_BASE_URL=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('base_url','https://open.bigmodel.cn/api/coding/paas/v4'))")
+    export LLM_API_KEY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('api_key',''))")
+    export AGENT_PORT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('port',9001))")
+    export TASK_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('task_id',''))")
+    export SHARED_DIR=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('shared_dir','/workspace/artifacts'))")
+    export AGENT_SYSTEM_PROMPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('system_prompt',''))" 2>/dev/null || echo "")
 fi
 
 echo "[Worker] Starting Agent: role=$AGENT_ROLE, model=$LLM_MODEL, port=$AGENT_PORT, shared_dir=$SHARED_DIR"

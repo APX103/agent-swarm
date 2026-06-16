@@ -206,15 +206,28 @@ class ContainerPoolManager:
             分配的容器，或 None（池耗尽）
         """
         async with self._lock:
-            # 找到 idle 容器
+            # 找到 idle 且存活 的容器
             idle = None
-            for c in self._pool.values():
+            for cid, c in self._pool.items():
                 if c.state == ContainerState.IDLE:
+                    # 检查容器是否真的在运行（防止 checkout 到已退出的僵尸容器）
+                    # 只在真实 docker client 下检查（mock 环境跳过）
+                    if self._client is not None and not isinstance(self._client, type(None)):
+                        try:
+                            info = self._client.containers.get(c.container_id)
+                            if info.status != "running":
+                                logger.warning("Container %s is %s (not running) — marking DEAD", c.container_name, info.status)
+                                c.state = ContainerState.DEAD
+                                continue
+                        except Exception:
+                            logger.warning("Container %s not found — marking DEAD", c.container_name)
+                            c.state = ContainerState.DEAD
+                            continue
                     idle = c
                     break
             
             if idle is None:
-                logger.warning("No idle containers available")
+                logger.warning("No idle+running containers available")
                 return None
             
             # 标记为 busy
@@ -295,17 +308,15 @@ class ContainerPoolManager:
             container.assigned_task_id = None
             container.assigned_role = None
 
-            # 清理容器内上个任务的产物文件（防止跨任务串扰）
-            await self._clean_container_artifacts(container)
+            # 不清理容器内文件——/workspace/artifacts 是 shared_output 的 bind mount，
+            # rm -rf 会删掉宿主机的 swarm.db 和其他重要文件。
+            # 跨任务串扰通过 per-task SHARED_DIR（contextvar）避免，不需要清理容器。
 
-            # 清理配置文件：必须保留原 inode，因为 Docker bind mount 在运行中的
-            # worker 容器内仍指向同一个 inode。直接 unlink 会导致容器里看到的是被
-            # 删除的旧文件，后续 checkout 写入的新文件无法被 worker 读取。
-            if container.config_file:
-                try:
-                    Path(container.config_file).write_text("{}")
-                except Exception:
-                    pass
+            # 注意：不重置 config.json 为 {}。reset 会导致 worker 的 reload_config
+            # 读到空配置，丢失 model/api_key/shared_dir，下一次 checkout 时如果
+            # reload 时机不对会用默认值（如 glm-coding-plan 而非 glm-4.7）。
+            # checkout 时会写入新 config 覆盖旧值，所以这里保留即可。
+            # （原代码：Path(container.config_file).write_text("{}")）
 
             # 检查是否需要回收
             if container.use_count >= self.max_uses:
@@ -314,20 +325,10 @@ class ContainerPoolManager:
 
         logger.info(f"Returned container {container.container_name} to pool")
 
-    async def _clean_container_artifacts(self, container: PooledContainer):
-        """清理容器内上个任务写入的产物文件，防止跨任务串扰。
-
-        通过 docker exec 删除容器内 /workspace/artifacts 下的内容（安全：
-        只影响这个容器的隔离文件系统，不影响宿主机共享盘）。
-        """
-        try:
-            import docker as _docker
-            client = _docker.from_env()
-            c = client.containers.get(container.container_name)
-            c.exec_run("sh -c 'rm -rf /workspace/artifacts/* 2>/dev/null; mkdir -p /workspace/artifacts'")
-        except Exception:
-            # 容器可能不存在（mock 模式）——安全跳过
-            logger.debug("Skip artifact cleanup for %s (no docker)", container.container_name)
+    # _clean_container_artifacts 已移除：
+    # 它执行 docker exec rm -rf /workspace/artifacts/*，但 /workspace/artifacts 是
+    # shared_output 的 bind mount，会删掉宿主机的 swarm.db。跨任务隔离通过
+    # per-task SHARED_DIR (contextvar) 实现，不需要清理容器文件系统。
     
     async def _recycle_container(self, container: PooledContainer):
         """回收并重建容器"""

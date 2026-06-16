@@ -34,6 +34,7 @@ def full_system(tmp_path):
         call_n["n"] += 1
         c = MagicMock()
         c.id = f"cont-{call_n['n']}"
+        c.status = "running"
         c.stop = MagicMock()
         c.remove = MagicMock()
         return c

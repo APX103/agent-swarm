@@ -30,9 +30,6 @@ class SessionService:
         self._base = Path(base_dir)
         self._locks: dict[str, asyncio.Lock] = {}
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        # Schema init runs once at construction (before the loop is hot); cheap
-        # and idempotent, so we keep it synchronous rather than forcing callers
-        # to await __init__.
         self._init_table()
 
     def _get_lock(self, session_id: str) -> asyncio.Lock:
@@ -44,13 +41,13 @@ class SessionService:
     # ── low-level sync sqlite helpers (always run in a worker thread) ─────────
 
     def _conn(self) -> sqlite3.Connection:
-        c = sqlite3.connect(self._db_path)
+        c = sqlite3.connect(self._db_path, timeout=10)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
         return c
 
     def _init_table(self) -> None:
-        with self._conn() as c:
+        c = self._conn()
+        try:
             c.execute(
                 """CREATE TABLE IF NOT EXISTS sessions_v2 (
                     session_id  TEXT PRIMARY KEY,
@@ -61,6 +58,9 @@ class SessionService:
                     created_at  REAL
                 )"""
             )
+            c.commit()
+        finally:
+            c.close()
 
     # ── public async API ─────────────────────────────────────────────────────
 

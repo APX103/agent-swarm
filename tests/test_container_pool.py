@@ -68,6 +68,7 @@ def mock_docker_client():
         call_count["n"] += 1
         c = MagicMock()
         c.id = f"container-abc{call_count['n']}"
+        c.status = "running"
         c.stop = MagicMock()
         c.remove = MagicMock()
         return c

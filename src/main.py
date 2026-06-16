@@ -53,11 +53,20 @@ async def _lifespan(app: FastAPI):
 
     # 1. 初始化持久化 + 任务管理器
     from src.storage.sqlite_store import SQLiteStore
-    store = SQLiteStore(settings.storage.shared_output_base + "/swarm.db")
-    session_svc = SessionService(
-        settings.storage.shared_output_base + "/swarm.db",
-        settings.storage.shared_output_base,
-    )
+    import sqlite3 as _sqlite3
+    _db_path = settings.storage.shared_output_base + "/swarm.db"
+    store = SQLiteStore(_db_path)
+    session_svc = SessionService(_db_path, settings.storage.shared_output_base)
+    # 验证表确实建好了
+    _v = _sqlite3.connect(_db_path)
+    _t = {r[0] for r in _v.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    _v.close()
+    if not {"tasks","sessions","sessions_v2"}.issubset(_t):
+        logger.error("DB tables missing! Forcing re-creation: %s", _t)
+        _f = _sqlite3.connect(_db_path)
+        _f.executescript("CREATE TABLE IF NOT EXISTS tasks (task_id TEXT PRIMARY KEY, tenant_id TEXT DEFAULT 'default', session_id TEXT, user_message TEXT, status TEXT DEFAULT 'created', result TEXT, artifacts TEXT DEFAULT '[]', work_dir TEXT, created_at TEXT, completed_at TEXT); CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, tenant_id TEXT DEFAULT 'default', work_dir TEXT NOT NULL, messages TEXT DEFAULT '[]', shared_context TEXT DEFAULT '', created_at REAL); CREATE TABLE IF NOT EXISTS sessions_v2 (session_id TEXT PRIMARY KEY, tenant_id TEXT DEFAULT 'default', work_dir TEXT NOT NULL, state TEXT DEFAULT '{}', events TEXT DEFAULT '[]', created_at REAL);")
+        _f.commit(); _f.close()
+    logger.info("DB initialized: %s", _db_path)
     task_manager = TaskManager(
         shared_output_base=settings.storage.shared_output_base,
         store=store,

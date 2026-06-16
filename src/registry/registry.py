@@ -112,7 +112,7 @@ class AgentRegistry:
         now = time.time()
 
         # ── endpoint 去重：同 endpoint 覆盖已有记录，不新增 ─────────────────
-        ep_index_key = f"agent:registry:endpoint:{endpoint}"
+        ep_index_key = f"agent:endpoint_index:{endpoint}"
         existing_id_raw = await redis.get(ep_index_key)
         if existing_id_raw:
             # 已有同 endpoint 的 agent——复用它的 id，覆盖记录
