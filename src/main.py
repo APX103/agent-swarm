@@ -151,7 +151,7 @@ async def _lifespan(app: FastAPI):
     # 7. 组装 session 管理器 + 可插拔编排器解析器并注入依赖
     session_mgr = SessionManager(settings.storage.shared_output_base, store=store)
     resolver = OrchestratorResolver(builtin=orchestrator, config=settings.orchestrator)
-    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr, session_svc=session_svc)
+    set_deps(orchestrator, task_manager, pool_manager, resolver=resolver, sess_mgr=session_mgr, session_svc=session_svc, dispatcher=dispatcher)
 
     # 8. 把直聊增强所需的依赖回填到 gateway（task_manager/session/dispatcher 在 3 之后才就绪）
     gateway.set_deps(

@@ -66,6 +66,15 @@ func NewClient(baseURL string) *Client {
 
 // SendMessage 发一个 blocking message/send，等 worker 跑完返回 task。
 func (c *Client) SendMessage(ctx context.Context, text string) (*Task, error) {
+	return c.SendMessageWithConfig(ctx, text, nil)
+}
+
+// SendMessageWithConfig 发 message/send，可透传额外 configuration（如 shared_dir）。
+func (c *Client) SendMessageWithConfig(ctx context.Context, text string, extraConfig map[string]any) (*Task, error) {
+	config := map[string]any{"blocking": true}
+	for k, v := range extraConfig {
+		config[k] = v
+	}
 	req := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -76,7 +85,7 @@ func (c *Client) SendMessage(ctx context.Context, text string) (*Task, error) {
 				"messageId": uuid.NewString(),
 				"parts":     []map[string]any{{"kind": "text", "text": text}},
 			},
-			"configuration": map[string]any{"blocking": true},
+			"configuration": config,
 		},
 	}
 	var resp map[string]any
