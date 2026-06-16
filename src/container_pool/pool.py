@@ -107,12 +107,23 @@ class ContainerPoolManager:
             logger.warning(f"Image not found: {self.image_name}. Building...")
             await self._build_image()
         
-        # 预启动容器
+        # 预启动容器：先清理可能残留的同名容器，避免 409 Conflict
         for i in range(self.pool_size):
-            container = await self._spawn_container(i)
-            if container:
-                self._pool[container.container_id] = container
-                logger.info(f"Pre-started container {i}: {container.container_name} (port {container.port})")
+            container_name = f"swarm-worker-{i}"
+            try:
+                try:
+                    old = self.client.containers.get(container_name)
+                    old.stop(timeout=3)
+                    old.remove(force=True)
+                    logger.info(f"Removed stale container {container_name}")
+                except Exception:
+                    pass
+                container = await self._spawn_container(i)
+                if container:
+                    self._pool[container.container_id] = container
+                    logger.info(f"Pre-started container {i}: {container.container_name} (port {container.port})")
+            except Exception as e:
+                logger.error(f"Failed to start container {i}: {e}")
         
         logger.info(f"Container pool ready: {len(self._pool)} containers")
     
@@ -280,10 +291,12 @@ class ContainerPoolManager:
             container.assigned_task_id = None
             container.assigned_role = None
             
-            # 清理配置文件
+            # 清理配置文件：必须保留原 inode，因为 Docker bind mount 在运行中的
+            # worker 容器内仍指向同一个 inode。直接 unlink 会导致容器里看到的是被
+            # 删除的旧文件，后续 checkout 写入的新文件无法被 worker 读取。
             if container.config_file:
                 try:
-                    Path(container.config_file).unlink(missing_ok=True)
+                    Path(container.config_file).write_text("{}")
                 except Exception:
                     pass
             

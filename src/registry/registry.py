@@ -86,7 +86,7 @@ class AgentRegistry:
 
     # ---- registration ----------------------------------------------------
 
-    async def register(self, agent_data: dict) -> str:
+    async def register(self, agent_data: dict, internal: bool = False) -> str:
         """Register a new agent.
 
         Parameters
@@ -94,6 +94,9 @@ class AgentRegistry:
         agent_data:
             Dict with keys matching :class:`AgentRegistration` (``name``,
             ``endpoint``, ``skills``, etc.).  Extra keys are preserved.
+        internal:
+            If True, the agent is a platform-internal declared agent (e.g. from
+            ``agents/*.yaml``) and never expires; it is always considered online.
 
         Returns
         -------
@@ -125,6 +128,7 @@ class AgentRegistry:
             "registered_at": now,
             "last_heartbeat": now,
             "instance_id": uuid.uuid4().hex,
+            "internal": internal,
         }
 
         key = _agent_key(agent_id)
@@ -133,13 +137,15 @@ class AgentRegistry:
             pipeline = redis.pipeline()
             # Store agent record as JSON hash
             pipeline.hset(key, mapping={"data": json.dumps(record)})
-            # Set TTL so stale entries auto-expire
-            pipeline.expire(key, self._heartbeat_ttl)
+            # Internal declared agents never expire; external agents need heartbeats.
+            if not internal:
+                pipeline.expire(key, self._heartbeat_ttl)
 
             # Add agent_id to each skill index SET
             for skill in agent_data["skills"]:
                 pipeline.sadd(_skill_key(skill), agent_id)
-                pipeline.expire(_skill_key(skill), self._heartbeat_ttl * 2)
+                if not internal:
+                    pipeline.expire(_skill_key(skill), self._heartbeat_ttl * 2)
 
             await pipeline.execute()
 
@@ -231,8 +237,32 @@ class AgentRegistry:
             logger.warning("get_agent failed for %s", agent_id, exc_info=True)
             return None
 
-    async def list_agents(self) -> list[dict]:
-        """Return all registered agents."""
+    def _is_online(self, record: dict) -> bool:
+        """根据 last_heartbeat 判断 agent 是否在线。
+
+        Redis TTL 理应清理过期 key，但如果 Redis 持久化或异常退出，仍可能残留旧记录。
+        这里再用时间戳做一次兜底过滤。内部声明式 agent（internal=True）永不过期。
+        """
+        if record.get("internal"):
+            return True
+        last = record.get("last_heartbeat") or record.get("registered_at") or 0
+        return (time.time() - last) < self._heartbeat_ttl * 2
+
+    def _with_status(self, record: dict) -> dict:
+        """给记录加上 online/offline 状态，不修改原数据。"""
+        record = dict(record)
+        record["status"] = "online" if self._is_online(record) else "offline"
+        return record
+
+    async def list_agents(self, online_only: bool = True) -> list[dict]:
+        """Return registered agents.
+
+        Parameters
+        ----------
+        online_only:
+            If True (default), filter out agents whose last heartbeat is older
+            than ``heartbeat_ttl * 2``.
+        """
         redis = await self._ensure_redis()
         try:
             keys = await redis.keys(f"{_KEY_PREFIX}*")
@@ -247,15 +277,20 @@ class AgentRegistry:
 
             agents: list[dict] = []
             for raw in results:
-                if raw is not None:
-                    agents.append(json.loads(raw))
+                if raw is None:
+                    continue
+                record = json.loads(raw)
+                record = self._with_status(record)
+                if online_only and record["status"] != "online":
+                    continue
+                agents.append(record)
             return agents
 
         except Exception:
             logger.warning("list_agents failed", exc_info=True)
             return []
 
-    async def find_by_skill(self, skill: str) -> list[dict]:
+    async def find_by_skill(self, skill: str, online_only: bool = True) -> list[dict]:
         """Find agents that declare *skill*."""
         redis = await self._ensure_redis()
         try:
@@ -270,8 +305,13 @@ class AgentRegistry:
 
             agents: list[dict] = []
             for raw in results:
-                if raw is not None:
-                    agents.append(json.loads(raw))
+                if raw is None:
+                    continue
+                record = json.loads(raw)
+                record = self._with_status(record)
+                if online_only and record["status"] != "online":
+                    continue
+                agents.append(record)
             return agents
 
         except Exception:
@@ -329,18 +369,33 @@ class AgentRegistry:
     # ---- health sweep ----------------------------------------------------
 
     async def health_sweep(self) -> int:
-        """Remove agents whose key has expired (stale cleanup).
+        """Remove stale agents and orphaned skill index entries.
 
         Since we set TTL on agent keys, Redis already removes the data.  This
-        method additionally cleans up any orphaned skill SET entries.
+        method additionally:
+        - Deletes agent keys whose last heartbeat is older than ``heartbeat_ttl * 2``
+          (useful when Redis persistence keeps old keys around).
+        - Cleans up any orphaned skill SET entries.
 
-        Returns the number of agents swept (keys that are already gone but
-        still referenced in skill indexes).
+        Returns the total number of entries removed.
         """
         redis = await self._ensure_redis()
         swept = 0
         try:
-            # Scan all skill index keys
+            # 1. Delete stale agent keys
+            stale_keys: list[str] = []
+            async for key in redis.scan_iter(f"{_KEY_PREFIX}*"):
+                raw = await redis.hget(key, "data")
+                if raw:
+                    record = json.loads(raw)
+                    if not self._is_online(record):
+                        stale_keys.append(key)
+            if stale_keys:
+                await redis.delete(*stale_keys)
+                swept += len(stale_keys)
+                logger.info("Health sweep deleted %d stale agent keys", len(stale_keys))
+
+            # 2. Scan all skill index keys and remove orphaned members
             skill_keys: list[str] = []
             async for key in redis.scan_iter(f"{_SKILL_PREFIX}*"):
                 skill_keys.append(key)
@@ -357,7 +412,7 @@ class AgentRegistry:
                     await redis.srem(sk, *to_remove)
 
             if swept:
-                logger.info("Health sweep removed %d orphaned skill references", swept)
+                logger.info("Health sweep removed %d stale/orphaned entries", swept)
 
         except Exception:
             logger.warning("health_sweep failed", exc_info=True)

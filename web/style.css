@@ -70,8 +70,12 @@ body {
 }
 .agent-card:hover { border-color: var(--border); }
 .agent-card.selected { border-color: var(--accent-2); background: rgba(74, 158, 255, 0.12); }
-.agent-card .agent-name { font-weight: 600; font-size: 13px; }
+.agent-card.offline { opacity: 0.55; cursor: not-allowed; }
+.agent-card .agent-name { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 6px; }
 .agent-card .agent-desc { color: var(--muted); font-size: 11px; margin-top: 2px; line-height: 1.4; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.status-dot.online { background: var(--success); box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.2); }
+.status-dot.offline { background: var(--danger); }
 
 .sidebar-footer { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
 .config-label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--muted); }

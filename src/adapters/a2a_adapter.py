@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 class A2AAdapter(AgentBackend):
     """Adapter for A2A-protocol agents."""
 
-    def __init__(self, base_url: str, timeout: int = 300) -> None:
+    def __init__(self, base_url: str, timeout: int = 300, **kwargs) -> None:
+        # kwargs lets factory pass through registry metadata (name, description,
+        # skills, etc.) without failing the strict signature.
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client: Optional[A2AClient] = None

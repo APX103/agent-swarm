@@ -392,6 +392,8 @@ class InternalDispatchRequest(BaseModel):
     task: str
     shared_dir: Optional[str] = None  # worker 产物目录（宿主路径）
     tenant_id: str = "default"
+    session_id: Optional[str] = None  # 用于解析 work_dir 并关联会话
+    task_id: Optional[str] = None     # 可选：外部 orchestrator 提供的任务 ID
 
 
 class InternalSessionEventRequest(BaseModel):
@@ -412,10 +414,34 @@ async def internal_dispatch(req: InternalDispatchRequest):
         raise HTTPException(503, "Dispatcher not available")
     from src.dispatcher.base import DispatchRequest
 
+    tenant_id = req.tenant_id or "default"
+
+    # 解析产物目录：显式 shared_dir 优先；否则按 session_id 解析会话工作目录。
+    shared_dir = req.shared_dir
+    if not shared_dir and req.session_id and _session_service is not None:
+        sess = await _session_service.get_or_create_with_id(req.session_id, tenant_id)
+        shared_dir = sess.work_dir
+
+    # 注册一个被跟踪的 Swarm task，让产物与任务 ID 关联。
+    task_id = req.task_id
+    if task_id is None and task_manager is not None:
+        task = await task_manager.create_task(user_message=req.task, tenant_id=tenant_id)
+        task_id = task.task_id
+        if shared_dir:
+            task.work_dir = Path(shared_dir)
+
+    context = {"tenant_id": tenant_id}
+    if shared_dir:
+        context["shared_dir"] = shared_dir
+    if task_id:
+        context["task_id"] = task_id
+    if req.session_id:
+        context["session_id"] = req.session_id
+
     request = DispatchRequest(
         agent_type=req.agent_type,
         task=req.task,
-        context={"shared_dir": req.shared_dir} if req.shared_dir else {},
+        context=context,
     )
     try:
         result = await _dispatcher.dispatch(request)
@@ -428,6 +454,7 @@ async def internal_dispatch(req: InternalDispatchRequest):
         "output": result.output,
         "error": result.error,
         "artifacts": result.artifacts,
+        "task_id": task_id,
     }
 
 

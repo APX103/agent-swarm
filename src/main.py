@@ -97,7 +97,7 @@ async def _lifespan(app: FastAPI):
                 _agent_id = await registry.register({
                     "name": _data["name"], "endpoint": _data["endpoint"],
                     "protocol": _proto, "skills": _data.get("skills", []),
-                })
+                }, internal=True)
                 if _proto in ("openai", "cli", "mcp", "a2a"):
                     _info = {"protocol": _proto}
                     _info["base_url" if _proto in ("openai", "a2a") else "server_url" if _proto == "mcp" else "command"] = _data["endpoint"]
@@ -157,7 +157,7 @@ async def _lifespan(app: FastAPI):
     # 8. 把直聊增强所需的依赖回填到 gateway（task_manager/session/dispatcher 在 3 之后才就绪）
     gateway.set_deps(
         registry, adapter_manager,
-        task_manager=task_manager, session_manager=session_mgr, dispatcher=dispatcher,
+        task_manager=task_manager, session_manager=session_mgr, session_service=session_svc, dispatcher=dispatcher,
     )
     logger.info("Gateway direct-chat deps wired")
     

@@ -18,6 +18,7 @@ class CLIAdapter(AgentBackend):
         args: Optional[list[str]] = None,
         timeout: int = 300,
         workdir: Optional[str] = None,
+        **kwargs,
     ) -> None:
         self.command = command
         self.args = args or []

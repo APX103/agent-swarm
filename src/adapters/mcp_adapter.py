@@ -15,6 +15,7 @@ class MCPAdapter(AgentBackend):
         self,
         server_url: str,
         timeout: int = 30,
+        **kwargs,
     ) -> None:
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout

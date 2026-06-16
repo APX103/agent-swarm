@@ -89,9 +89,17 @@ def app_with_direct_chat(tmp_path):
     )
     adapter_manager.get = MagicMock(return_value=adapter)
 
+    # session service: mock the async methods now used by direct-chat
+    sess_svc = MagicMock()
+    sess_svc.get_or_create_with_id = AsyncMock(
+        return_value=MagicMock(session_id="sess-1", work_dir=str(work_base))
+    )
+    sess_svc.append_event = AsyncMock(return_value=None)
+
     set_deps(
         registry, adapter_manager,
-        task_manager=task_mgr, session_manager=sess_mgr, dispatcher=dispatcher,
+        task_manager=task_mgr, session_manager=sess_mgr, session_service=sess_svc,
+        dispatcher=dispatcher,
     )
 
     @asynccontextmanager

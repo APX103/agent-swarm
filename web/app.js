@@ -37,6 +37,10 @@ function init() {
   applyMode();
   bindEvents();
   connect();
+  // 每 10 秒刷新一次外部 agent 列表，及时反映在线/离线变化
+  setInterval(() => {
+    if (state.backendUrl) connect();
+  }, 10000);
 }
 
 function bindEvents() {
@@ -56,6 +60,11 @@ function bindEvents() {
 }
 
 function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 120) + "px"; }
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("zh-CN");
+}
 
 // ── 连接后端 ────────────────────────────────────────────────────────────────
 async function connect() {
@@ -101,12 +110,24 @@ function renderRoster() {
     const hint = document.createElement("div");
     hint.className = "roster-hint";
     hint.textContent = state.externalAgents.length
-      ? "选择一个 Agent 直聊"
-      : "无外部 Agent（注册后可直聊）";
+      ? `在线外部 Agent：${state.externalAgents.length} 个`
+      : "无在线外部 Agent（已自动过滤离线/过期注册）";
     els.roster.appendChild(hint);
     for (const a of state.externalAgents) {
-      const card = agentCard(a.id, a.name, a.description || a.endpoint, a.id === state.selectedAgent);
+      const online = a.status === "online";
+      const badge = `<span class="status-dot ${online ? "online" : "offline"}"></span>`;
+      const meta = online
+        ? `心跳 ${fmtTime(a.last_heartbeat)}`
+        : `离线`;
+      const card = agentCard(
+        a.id,
+        `${badge} ${a.name}`,
+        `${a.description || a.endpoint || ""}<br><small>${escapeHtml(meta)}</small>`,
+        a.id === state.selectedAgent
+      );
+      card.classList.toggle("offline", !online);
       card.onclick = () => {
+        if (!online) return;
         state.selectedAgent = a.id;
         renderRoster();
         els.chatTitle.textContent = `💬 直聊：${a.name}`;
@@ -119,7 +140,7 @@ function renderRoster() {
 function agentCard(id, name, desc, selected) {
   const div = document.createElement("div");
   div.className = "agent-card" + (selected ? " selected" : "");
-  div.innerHTML = `<div class="agent-name">${escapeHtml(name)}</div><div class="agent-desc">${escapeHtml(desc || "")}</div>`;
+  div.innerHTML = `<div class="agent-name">${name}</div><div class="agent-desc">${desc || ""}</div>`;
   return div;
 }
 

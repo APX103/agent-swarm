@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -25,6 +26,7 @@ _adapter_manager = None
 # /invoke falls back to the original thin adapter.invoke (no session/task/streaming).
 _task_manager = None
 _session_manager = None
+_session_service = None
 _dispatcher = None
 
 # Default heartbeat interval (seconds) advertised to agents. The real
@@ -45,18 +47,19 @@ def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
     return cb
 
 
-def set_deps(registry, adapter_manager, task_manager=None, session_manager=None, dispatcher=None):
+def set_deps(registry, adapter_manager, task_manager=None, session_manager=None, session_service=None, dispatcher=None):
     """Set gateway dependencies (called from main.py lifespan).
 
     The last three are optional and enable the enriched direct-chat path on
     POST /{agent_id}/invoke (session + streaming + task tracking). When omitted,
     /invoke keeps its original thin behavior.
     """
-    global _registry, _adapter_manager, _task_manager, _session_manager, _dispatcher
+    global _registry, _adapter_manager, _task_manager, _session_manager, _session_service, _dispatcher
     _registry = registry
     _adapter_manager = adapter_manager
     _task_manager = task_manager
     _session_manager = session_manager
+    _session_service = session_service
     _dispatcher = dispatcher
     _invoke_breakers.clear()  # reset breaker state on (re)wiring
 
@@ -258,16 +261,17 @@ async def invoke_agent(agent_id: str, body: InvokeRequest):
     """
     if _registry is None:
         raise HTTPException(status_code=503, detail="Registry not available")
+
+    if body.session_id is not None:
+        return await _invoke_direct_chat(agent_id, body)
+
+    # ── thin invoke (original path) ─────────────────────────────────────────
     if _adapter_manager is None:
         raise HTTPException(status_code=503, detail="Adapter manager not available")
     adapter = _adapter_manager.get(agent_id)
     if adapter is None:
         raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
 
-    if body.session_id is not None:
-        return await _invoke_direct_chat(agent_id, body)
-
-    # ── thin invoke (original path) ─────────────────────────────────────────
     breaker = _get_invoke_breaker(agent_id)
     try:
         result = await breaker.call(adapter.invoke, body.task, body.context)
@@ -294,10 +298,10 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
     Resolves the agent's skill (agent_type) from the registry so the Dispatcher
     can route by id directly, and forwards progress to the WebSocket.
     """
-    if _task_manager is None or _session_manager is None or _dispatcher is None:
+    if _task_manager is None or _session_service is None or _dispatcher is None:
         raise HTTPException(
             status_code=503,
-            detail="Direct-chat not available (task_manager/session_manager/dispatcher not wired)",
+            detail="Direct-chat not available (task_manager/session_service/dispatcher not wired)",
         )
 
     # resolve agent record (need its skill as agent_type + existence check)
@@ -310,12 +314,13 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
     agent_type = (agent.get("skills") or [None])[0] or agent.get("name") or agent_id
 
-    # session: reuse work folder + (future) history
-    sess = _session_manager.get_or_create(body.session_id, tenant_id="default")
+    # session: reuse work folder + persist events to SessionService (same backend as /api/sessions)
+    sess = await _session_service.get_or_create_with_id(body.session_id, tenant_id="default")
 
     # tracked task
     task = await _task_manager.create_task(user_message=body.task, tenant_id="default")
-    task.work_dir = sess.work_dir
+    task.session_id = body.session_id
+    task.work_dir = Path(sess.work_dir)
 
     async def on_event(event: dict):
         await ws_manager.broadcast(task.task_id, event)
@@ -330,7 +335,7 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
             {"type": "agent_progress", "task_id": task.task_id, "agent": agent_id, "data": snap},
         )
 
-    ctx = {"task_id": task.task_id, "tenant_id": "default", "shared_dir": str(sess.work_dir)}
+    ctx = {"task_id": task.task_id, "tenant_id": "default", "shared_dir": sess.work_dir}
     request = DispatchRequest(
         agent_type=agent_type,
         task=body.task,
@@ -341,16 +346,36 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
 
     async def run_direct():
         try:
+            await _session_service.append_event(body.session_id, {
+                "type": "agent_dispatched",
+                "agent_type": agent_type,
+                "task": body.task,
+            })
             result = await _dispatcher.dispatch(request)
-            _session_manager.save(sess)
             if result.success:
                 await _task_manager.complete_task(task.task_id, result.output or "")
+                await _session_service.append_event(body.session_id, {
+                    "type": "agent_completed",
+                    "agent_type": agent_type,
+                    "success": True,
+                })
             else:
                 await _task_manager.fail_task(task.task_id, result.error or "direct-chat failed")
+                await _session_service.append_event(body.session_id, {
+                    "type": "agent_completed",
+                    "agent_type": agent_type,
+                    "success": False,
+                    "error": result.error,
+                })
         except Exception as e:
             logger.error("Direct-chat dispatch failed: %s", e, exc_info=True)
-            _session_manager.save(sess)
             await _task_manager.fail_task(task.task_id, str(e))
+            await _session_service.append_event(body.session_id, {
+                "type": "agent_completed",
+                "agent_type": agent_type,
+                "success": False,
+                "error": str(e),
+            })
 
     asyncio.create_task(run_direct())
 

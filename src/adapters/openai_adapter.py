@@ -17,6 +17,7 @@ class OpenAIAdapter(AgentBackend):
         api_key: str = "",
         model: str = "default",
         timeout: int = 300,
+        **kwargs,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
