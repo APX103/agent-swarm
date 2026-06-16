@@ -23,18 +23,24 @@ Thumbs.db
 # Environment / Secrets
 .env
 config/default.yaml
+config/default.local.yaml
 
 # Pool runtime configs (injected at runtime, contain API keys)
 .pool_configs/
 
 # Test / Debug artifacts
 .pytest_cache/
-debug_*.py
+debug_api.py
+debug_config.py
 test_tool_call.py
 run_service.sh
 
 # Shared output (runtime artifacts, not source)
 shared_output/
 
-# Docker
+# Docker runtime
 docker/.pool_configs/
+
+# Go binaries (eino-orchestrator build output, not source)
+eino-orchestrator/eino-orchestrator
+*.exe
