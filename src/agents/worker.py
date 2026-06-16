@@ -575,30 +575,45 @@ def execute_file_tool(name: str, args: dict) -> str:
         env_dir = os.environ.get("SHARED_DIR")
         if env_dir:
             shared_dir = env_dir
-    role_dir = Path(shared_dir) / AGENT_ROLE.split("-")[0]  # frontend/backend/general
+    role_prefix = AGENT_ROLE.split("-")[0]  # frontend/backend/general
+    role_dir = Path(shared_dir) / role_prefix
     role_dir.mkdir(parents=True, exist_ok=True)
+
+    def _resolve_path(file_path: str) -> Path:
+        """解析文件路径，避免双层 role 目录（backend/backend/main.py）。
+
+        LLM 可能传 "backend/main.py" 或 "main.py"——如果已有 role 前缀就不再拼。
+        """
+        p = file_path.lstrip("/")
+        # 如果路径以 role 前缀开头（如 "backend/main.py"），直接用 role_dir 的父级
+        parts = p.split("/")
+        if parts[0] == role_prefix:
+            # 去掉重复的 role 前缀，拼到 shared_dir 下
+            return Path(shared_dir) / p
+        return role_dir / p
     
     if name == "write_file":
-        path = role_dir / args["path"]
+        path = _resolve_path(args["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(args["content"], encoding="utf-8")
         return f"Written to {args['path']} ({len(args['content'])} bytes)"
-    
+
     elif name == "read_file":
-        path = role_dir / args["path"]
+        path = _resolve_path(args["path"])
         if not path.exists():
             return f"File not found: {args['path']}"
         content = path.read_text(encoding="utf-8", errors="replace")
         return content[:5000]  # 限制返回长度
-    
+
     elif name == "list_directory":
-        target_dir = role_dir
         sub_path = args.get("path", "")
         if sub_path:
-            target_dir = role_dir / sub_path
+            target_dir = _resolve_path(sub_path)
+        else:
+            target_dir = role_dir
         if not target_dir.exists():
             return f"Directory not found: {sub_path}"
-        files = [str(f.relative_to(role_dir)) for f in target_dir.rglob("*") if f.is_file()]
+        files = [str(f.relative_to(Path(shared_dir))) for f in target_dir.rglob("*") if f.is_file()]
         return "\n".join(files) if files else "(empty)"
     
     elif name == "run_command":

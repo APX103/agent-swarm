@@ -543,7 +543,7 @@ class Orchestrator:
             })
 
         if self.task_manager:
-            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            artifacts_dir = self._get_artifacts_dir()
             if artifacts_dir:
                 plan_dir = artifacts_dir / "_plan"
                 plan_dir.mkdir(parents=True, exist_ok=True)
@@ -621,6 +621,21 @@ class Orchestrator:
             ctx["shared_dir"] = self._current_session_work_dir
         return ctx
 
+    def _get_artifacts_dir(self):
+        """获取产物目录——优先 task work_dir，回退 session work_dir。
+
+        task.work_dir 有时没被正确设置（in-memory task 对象可能和 routes.py
+        创建的不是同一个），所以回退到 session work_dir（worker 实际写文件的路径）。
+        """
+        if self.task_manager:
+            d = self.task_manager.get_artifacts_dir(self._current_task_id)
+            if d:
+                return d
+        if self._current_session_work_dir:
+            from pathlib import Path
+            return Path(self._current_session_work_dir)
+        return None
+
     def _build_worker_task(self, task: str) -> str:
         """将共享上下文注入 Worker 任务描述"""
         if self._shared_context:
@@ -681,7 +696,7 @@ class Orchestrator:
         if not self.task_manager:
             return "错误：TaskManager 未初始化"
         
-        artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+        artifacts_dir = self._get_artifacts_dir()
         if not artifacts_dir:
             return "错误：未找到任务工作目录"
         
@@ -703,7 +718,7 @@ class Orchestrator:
         if not self.task_manager:
             return "错误：TaskManager 未初始化"
         
-        artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+        artifacts_dir = self._get_artifacts_dir()
         if not artifacts_dir:
             return "错误：未找到任务工作目录"
         
@@ -725,7 +740,7 @@ class Orchestrator:
 
         # 强制 review：每个已分派 Agent 必须产出文件，否则拒绝完成（让编排器重新 dispatch）
         if self.task_manager and self._dispatched:
-            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            artifacts_dir = self._get_artifacts_dir()
             if artifacts_dir:
                 dispatched_types = [t for t, _ in self._dispatched.values()]
                 review = review_artifacts(dispatched_types, artifacts_dir)
@@ -738,7 +753,7 @@ class Orchestrator:
 
         artifact_warning = ""
         if self.task_manager:
-            artifacts_dir = self.task_manager.get_artifacts_dir(self._current_task_id)
+            artifacts_dir = self._get_artifacts_dir()
             if artifacts_dir and artifacts_dir.exists():
                 real_files = [
                     f for f in artifacts_dir.rglob("*")
