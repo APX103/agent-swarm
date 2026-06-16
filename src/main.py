@@ -203,12 +203,17 @@ def create_app(lifespan=None) -> FastAPI:
     app.include_router(router)
     app.include_router(gateway.router)
 
-    # 挂载前端静态文件（web/ 目录，方便单机 demo 直接访问 /ui）。
-    # 前端也可独立部署到任意位置——CORS 已开 *，配置好后端 endpoint 即可。
-    _web_dir = Path(__file__).parent.parent / "web"
-    if _web_dir.exists():
-        from fastapi.staticfiles import StaticFiles
-        app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
+    # 交互式聊天 UI 已下线：交互统一收敛到 eino-agent，Swarm 只保留监控 Dashboard。
+    # /ui 与 /ui/ 重定向到 /dashboard/。
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/ui")
+    async def _redirect_ui():
+        return RedirectResponse(url="/dashboard/")
+
+    @app.get("/ui/")
+    async def _redirect_ui_slash():
+        return RedirectResponse(url="/dashboard/")
 
     # 挂载监控仪表板（dashboard/ 目录，通过配置开关控制）。
     if settings.dashboard.enabled:
