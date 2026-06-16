@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Swarm — 架构审计报告</title>
+<style>
+:root { --bg:#0f1115; --panel:#171a21; --border:#2a2f3a; --text:#e6e9ef; --muted:#8b93a7; --accent:#f5b400; --bad:#f85149; --warn:#d29922; --ok:#3fb950; --code:#1e222b; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); line-height:1.7; padding:24px; max-width:1000px; margin:0 auto; }
+h1 { font-size:26px; margin-bottom:4px; }
+h2 { font-size:19px; margin:28px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); color:var(--accent); }
+h3 { font-size:15px; margin:18px 0 6px; }
+.meta { color:var(--muted); font-size:13px; margin-bottom:20px; }
+.severity { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; }
+.s-bad { background:rgba(248,81,73,.2); color:var(--bad); }
+.s-warn { background:rgba(210,153,34,.2); color:var(--warn); }
+.s-ok { background:rgba(63,185,80,.2); color:var(--ok); }
+.issue { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:16px 20px; margin:12px 0; }
+.issue.bug { border-left:4px solid var(--bad); }
+.issue.warn { border-left:4px solid var(--warn); }
+.issue h3 { color:var(--text); }
+.loc { font-family:"SF Mono",Menlo,monospace; font-size:12px; color:var(--accent); background:var(--code); padding:1px 6px; border-radius:3px; }
+pre { background:var(--code); padding:12px; border-radius:6px; overflow-x:auto; font-family:"SF Mono",Menlo,monospace; font-size:12px; line-height:1.5; border:1px solid var(--border); margin:8px 0; white-space:pre-wrap; }
+table { width:100%; border-collapse:collapse; margin:10px 0; font-size:13px; }
+th,td { padding:7px 10px; border:1px solid var(--border); text-align:left; }
+th { background:var(--panel); color:var(--accent); }
+code { background:var(--code); padding:1px 5px; border-radius:3px; font-family:"SF Mono",Menlo,monospace; font-size:12px; color:var(--accent); }
+.toc { background:var(--panel); padding:14px 18px; border-radius:8px; margin:14px 0; border:1px solid var(--border); font-size:13px; }
+.toc a { color:var(--accent); text-decoration:none; }
+.footer { margin-top:36px; padding-top:14px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+
+<h1>🔍 Agent Swarm — 架构审计报告</h1>
+<div class="meta">日期：2026-06-16 ｜ 审计范围：全部核心代码 ｜ 结论：5 个设计级问题 + 6 个中等问题</div>
+
+<div class="issue bug">
+<h3>用户报告的症状 → 根因映射</h3>
+<table>
+<tr><th>症状</th><th>根因</th><th>位置</th></tr>
+<tr><td>"会忘记东西"</td><td>两套 session 存储互不同步 + shared_context 恢复条件 bug</td><td><span class="loc">orchestrator.py:335-346</span></td></tr>
+<tr><td>"逻辑不合理"</td><td>plan 写入 SessionService 但从不读回来</td><td><span class="loc">orchestrator.py:497-508 写 / 338 读</span></td></tr>
+<tr><td>"不稳定"</td><td>SHARED_DIR 并发覆盖 + INSERT OR REPLACE 丢数据 + 僵尸容器循环</td><td><span class="loc">worker.py:42-64 / sqlite_store.py:126</span></td></tr>
+<tr><td>垃圾代码通过审查</td><td>finalize 只检查文件存在不检查内容</td><td><span class="loc">orchestrator.py:76-92</span></td></tr>
+</table>
+</div>
+
+<div class="toc">
+<strong>目录</strong> 🔴 严重 P0 &nbsp;|&nbsp; 🟡 中等 P1 &nbsp;|&nbsp; 📋 修复优先级建议<br><br>
+<a href="#p0">🔴 P0 设计级问题（5 个）</a><br>
+<a href="#p1">🟡 P1 中等问题（6 个）</a><br>
+<a href="#fix">📋 修复路线图</a>
+</div>
+
+<!-- ──────────────────────────────────────────────── -->
+<h2 id="p0">🔴 P0 — 设计级问题（5 个）</h2>
+
+<div class="issue bug">
+<h3>P0-1：两套 session 存储互不同步 <span class="severity s-bad">最高优先级</span></h3>
+<p><strong>根因</strong>：同一 session_id 的数据存在两张表里，各记各的，互不通信。</p>
+<table>
+<tr><th></th><th>SessionManager (sessions 表)</th><th>SessionService (sessions_v2 表)</th></tr>
+<tr><td><strong>记录</strong></td><td>messages（对话历史）<br>shared_context（计划上下文）</td><td>state（结构化状态）<br>events（事件流）</td></tr>
+<tr><td><strong>谁读</strong></td><td>内置 orchestrator（execute 恢复记忆）</td><td>dashboard / /api/sessions/{id}/events</td></tr>
+<tr><td><strong>谁写</strong></td><td>/api/chat save()</td><td>orchestrator 写 plan/state（<strong>但从不读回来</strong>）</td></tr>
+</table>
+<p><strong>后果</strong>：orchestrator 把 plan 写进 sessions_v2.state，下一轮只从 sessions 表读 messages/shared_context——<strong>它写的东西自己永远不读</strong>。"会忘记计划"就是这个原因。</p>
+<pre>orchestrator.py:497-508  → await self._session_service.update_state(sid, {"plan": {...}})  # 写入
+orchestrator.py:338      → self._shared_context = session.shared_context                   # 从 SessionManager 读（不同表！）</pre>
+<p><strong>修复</strong>：合并为单一 session 存储统一 API；或至少让 orchestrator execute() 从 SessionService 读回 state.plan。</p>
+</div>
+
+<div class="issue bug">
+<h3>P0-2：shared_context 恢复条件有 bug <span class="severity s-bad">直接导致"忘记"</span></h3>
+<p><strong>根因</strong>：恢复 shared_context 的条件依赖 messages 非空，但 messages 为空不代表 shared_context 为空。</p>
+<pre>orchestrator.py:335-346
+if session and session.messages:     # ← messages 为空就进入 else
+    self._shared_context = session.shared_context   # 恢复 ✅
+else:
+    self._shared_context = ""        # ← 擦掉！❌</pre>
+<p><strong>场景</strong>：新 session 第一轮，shared_context 有值但 messages 为空 → shared_context 被擦。</p>
+<p><strong>修复</strong>：条件改为 <code>if session:</code>，messages 有无单独处理。</p>
+</div>
+
+<div class="issue bug">
+<h3>P0-3：SHARED_DIR 是进程全局变量，并发请求互相覆盖 <span class="severity s-bad">导致文件写错目录</span></h3>
+<p><strong>根因</strong>：worker 的 <code>reload_config()</code> 改的是 <code>os.environ["SHARED_DIR"]</code>（进程级全局）。uvicorn 是单进程，两个并发请求的 reload_config 会互相覆盖。</p>
+<pre>worker.py:55-64  → reload_config() 改 os.environ["SHARED_DIR"]
+worker.py:529    → execute_file_tool 读 os.environ.get("SHARED_DIR")
+
+# 请求 A 设 SHARED_DIR=/task-A，请求 B 设 SHARED_DIR=/task-B
+# 如果 A 的 tool 执行在 B 的 reload 之后，A 的文件写到 /task-B 里</pre>
+<p><strong>后果</strong>：并发任务时，A 的产物写到 B 的目录，B 看不到 A 的产出。</p>
+<p><strong>修复</strong>：SHARED_DIR 从全局变量改为 per-request context（FastAPI 的 request.state 或 contextvar）。</p>
+</div>
+
+<div class="issue bug">
+<h3>P0-4：INSERT OR REPLACE 全行覆盖，并发丢数据 <span class="severity s-bad">丢消息/丢事件</span></h3>
+<p><strong>根因</strong>：两套存储都用 <code>INSERT OR REPLACE</code> 整行写入。两个请求操作同一个 session_id 时，后写的覆盖先写的。</p>
+<pre>sqlite_store.py:126  → INSERT OR REPLACE INTO sessions (session_id, messages, ...) VALUES (...)
+service.py:144        → INSERT OR REPLACE INTO sessions_v2 (session_id, state, events, ...) VALUES (...)</pre>
+<p><strong>场景</strong>：请求 A 写入 messages=[m1]，请求 B 同时写入 messages=[m1,m2]。B 先写，A 后写 → messages 变回 [m1]，m2 丢失。</p>
+<p><strong>修复</strong>：改用列级 <code>UPDATE</code> 或加锁；read-modify-write 包在事务里；加 asyncio.Lock per session_id。</p>
+</div>
+
+<div class="issue bug">
+<h3>P0-5：finalize 只检查文件存在，不检查内容 <span class="severity s-bad">垃圾代码=完成</span></h3>
+<p><strong>根因</strong>：<code>review_artifacts()</code> 只数文件个数，不打开、不解析、不验证。</p>
+<pre>orchestrator.py:76-92
+files = [f for f in d.rglob("*") if f.is_file()]
+if not files: missing.append(agent_type)  # 有文件就算通过</pre>
+<p><strong>后果</strong>：Agent 写了个空的 <code>index.html</code> 或 <code>print("hello")</code> 也算通过审查。</p>
+<p><strong>修复</strong>：加内容检查（至少检查文件非空 + 基本语法校验）；或让 LLM 读文件后判断。</p>
+</div>
+
+<!-- ──────────────────────────────────────────────── -->
+<h2 id="p1">🟡 P1 — 中等问题（6 个）</h2>
+
+<div class="issue warn">
+<h3>P1-1：容器归还时不清理上一个任务的文件 <span class="severity s-warn">跨任务产物串扰</span></h3>
+<p><code>return_container()</code> 只重置 config 为 <code>{}</code>，不删文件。<code>shared_output</code> 目录随任务增多无限膨胀，多任务文件堆在同一 session 目录里互相干扰。</p>
+<p><span class="loc">pool.py:282-308</span></p>
+</div>
+
+<div class="issue warn">
+<h3>P1-2：_tasks / _bg_tasks 字典只增不删 <span class="severity s-warn">内存泄漏</span></h3>
+<p>worker 的 <code>_tasks</code> 和 <code>_bg_tasks</code> 只在 <code>handle_send_message</code> 添加，从不删除。每个 task dict 含完整历史 + progress 列表，跑 50 个任务后可能占几十 MB。</p>
+<p><span class="loc">worker.py:235, 354</span></p>
+</div>
+
+<div class="issue warn">
+<h3>P1-3：DockerBackend 只暴露 1 个逻辑 target <span class="severity s-warn">没有真正 failover</span></h3>
+<p><code>candidates()</code> 永远返回 <code>[DispatchTarget(kind=DOCKER, ...)]</code>。dispatcher 的 failover 逻辑遍历 candidates，但永远只有 1 个——重试只是对同一个逻辑 target 再试一次，碰巧可能拿到不同的物理容器。</p>
+<p><span class="loc">backends.py:43-45 + dispatcher.py:118</span></p>
+</div>
+
+<div class="issue warn">
+<h3>P1-4：LLM 超时 300s 但 worker 线程不杀 <span class="severity s-warn">僵尸线程</span></h3>
+<p>dispatcher 的 <code>asyncio.wait_for</code> 300s 超时后，worker 容器被归还，但 worker 内部的 LLM 调用线程仍在跑——归还后的容器可能继续写文件到新任务的目录。</p>
+<p><span class="loc">dispatcher.py:187 + worker.py:507</span></p>
+</div>
+
+<div class="issue warn">
+<h3>P1-5：ContainerState.DEAD 定义了但从不赋值 <span class="severity s-warn">僵尸容器循环</span></h3>
+<p>容器启动/就绪失败时从不标记 DEAD，坏容器被归还后反复循环——每次 checkout 浪费 30s 就绪检查超时。</p>
+<p><span class="loc">pool.py:18（定义）/ pool.py:267-282（就绪检查）</span></p>
+</div>
+
+<div class="issue warn">
+<h3>P1-6：result_cache 用 task 文本做 key <span class="severity s-warn">相同 prompt 返回旧结果</span></h3>
+<p>缓存 key 是 <code>(agent_type, hash(task_text))</code>，不是 task_id。如果两个不同 task 恰好用相同 prompt，第二个直接返回第一个的缓存结果。</p>
+<p><span class="loc">result_cache.py:27</span></p>
+</div>
+
+<!-- ──────────────────────────────────────────────── -->
+<h2 id="fix">📋 修复路线图</h2>
+
+<table>
+<tr><th>优先级</th><th>问题</th><th>改动量</th><th>建议时机</th></tr>
+<tr><td><span class="severity s-bad">P0-1</span></td><td>合并两套 session 存储</td><td>大（~8 文件）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-bad">P0-2</span></td><td>shared_context 恢复条件</td><td>小（1 行）</td><td><strong>立即修</strong></td></tr>
+<tr><td><span class="severity s-bad">P0-3</span></td><td>SHARED_DIR 改 per-request</td><td>中（worker.py 重构）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-bad">P0-4</span></td><td>INSERT OR REPLACE → UPDATE + 锁</td><td>中（3 文件）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-bad">P0-5</span></td><td>finalize 加内容检查</td><td>小（1 函数）</td><td><strong>立即修</strong></td></tr>
+<tr><td><span class="severity s-warn">P1-1</span></td><td>容器归还清理文件</td><td>小（pool.py）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-warn">P1-2</span></td><td>_tasks 字典加 TTL 清理</td><td>小（worker.py）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-warn">P1-3</span></td><td>DockerBackend 多 target</td><td>中（架构调整）</td><td>低优先</td></tr>
+<tr><td><span class="severity s-warn">P1-4</span></td><td>LLM 超时杀线程</td><td>中（worker.py）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-warn">P1-5</span></td><td>容器标记 DEAD + 不再循环</td><td>小（pool.py）</td><td>下一个迭代</td></tr>
+<tr><td><span class="severity s-warn">P1-6</span></td><td>cache key 加 task_id</td><td>小（1 行）</td><td>立即修</td></tr>
+</table>
+
+<h3>建议：先修 3 个"立即修"的（1 天内）</h3>
+<ol>
+<li><strong>P0-2</strong>：shared_context 恢复条件 <code>if session and session.messages</code> → <code>if session</code>（1 行改动）</li>
+<li><strong>P0-5</strong>：review_artifacts 加文件非空检查 + 基本语法校验（1 个函数）</li>
+<li><strong>P1-6</strong>：result_cache key 加 task_id（1 行改动）</li>
+</ol>
+<p>这 3 个改动小、风险低、效果明显。修完后"忘记东西"和"垃圾代码通过"两个症状会显著缓解。</p>
+
+<h3>然后：下一个迭代修 P0-1/P0-3/P0-4（架构层面）</h3>
+<p>合并两套 session 存储 + SHARED_DIR 改 per-request + 存储加锁——这 3 个是稳定性的根本，但改动量较大，需要单独规划。</p>
+
+<div class="footer">
+Agent Swarm 架构审计报告 ｜ 2026-06-16 ｜ 5 个 P0 + 6 个 P1 ｜ 审计方法：全代码重新阅读 + 三路并行审计
+</div>
+
+</body>
+</html>
