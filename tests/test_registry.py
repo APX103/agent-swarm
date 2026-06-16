@@ -20,6 +20,14 @@ class FakePipeline:
 
     # --- commands that queue up ---
 
+    def set(self, key, value, **kwargs):
+        self._commands.append(("set", key, value))
+        return self
+
+    def get(self, key):
+        self._commands.append(("get", key))
+        return self
+
     def hset(self, key, mapping=None, **kwargs):
         self._commands.append(("hset", key, mapping or {}))
         return self
@@ -50,7 +58,14 @@ class FakePipeline:
         results = []
         for cmd in self._commands:
             op = cmd[0]
-            if op == "hset":
+            if op == "set":
+                _key, value = cmd[1], cmd[2]
+                self._store[_key] = value
+                results.append(True)
+            elif op == "get":
+                _key = cmd[1]
+                results.append(self._store.get(_key))
+            elif op == "hset":
                 _key, mapping = cmd[1], cmd[2]
                 self._store.setdefault(_key, {}).update(mapping)
                 results.append(True)
@@ -99,6 +114,12 @@ class FakeRedis:
         pass
 
     # --- strings / hashes ---
+
+    async def get(self, key):
+        return self._store.get(key)
+
+    async def set(self, key, value, **kwargs):
+        self._store[key] = value
 
     async def hset(self, key, mapping=None, **kwargs):
         self._store.setdefault(key, {}).update(mapping or {})
@@ -392,9 +413,9 @@ async def test_list_agents(registry, fake_redis):
     """list_agents() returns all registered agents."""
     await _connect_registry(registry, fake_redis)
 
-    id1 = await registry.register(_sample_agent_data(name="agent-one"))
-    id2 = await registry.register(_sample_agent_data(name="agent-two"))
-    id3 = await registry.register(_sample_agent_data(name="agent-three"))
+    id1 = await registry.register(_sample_agent_data(name="agent-one", endpoint="http://localhost:8001"))
+    id2 = await registry.register(_sample_agent_data(name="agent-two", endpoint="http://localhost:8002"))
+    id3 = await registry.register(_sample_agent_data(name="agent-three", endpoint="http://localhost:8003"))
 
     agents = await registry.list_agents()
 
@@ -421,9 +442,9 @@ async def test_find_by_skill(registry, fake_redis):
     """find_by_skill() returns agents that have the specified skill."""
     await _connect_registry(registry, fake_redis)
 
-    await registry.register(_sample_agent_data(name="nlp-agent", skills=["nlp", "translation"]))
-    await registry.register(_sample_agent_data(name="code-agent", skills=["coding", "debugging"]))
-    await registry.register(_sample_agent_data(name="multi-agent", skills=["nlp", "coding"]))
+    await registry.register(_sample_agent_data(name="nlp-agent", skills=["nlp", "translation"], endpoint="http://a:8000"))
+    await registry.register(_sample_agent_data(name="code-agent", skills=["coding", "debugging"], endpoint="http://b:8000"))
+    await registry.register(_sample_agent_data(name="multi-agent", skills=["nlp", "coding"], endpoint="http://c:8000"))
 
     nlp_agents = await registry.find_by_skill("nlp")
     assert len(nlp_agents) == 2

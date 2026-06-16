@@ -63,10 +63,43 @@ async function refreshData() {
     state.tasks = tasks;
     state.sessions = sessions;
     setConnection(true, '已连接');
-    renderCurrentPage();
+    // 只更新内容，不重建整个 DOM（避免下拉/折叠状态丢失）
+    updateContentInPlace();
   } catch (e) {
     console.error('refresh failed', e);
     setConnection(false, '连接失败');
+  }
+}
+
+// 智能更新：只在路由变化时重建 DOM；刷新数据时只更新已有元素内容
+function updateContentInPlace() {
+  const route = parseRoute();
+  const renderer = routes[route.name] || renderOverview;
+  // 如果内容区为空（首次加载或路由切换），全量渲染
+  if (!$('#content').innerHTML.trim() || state._lastRoute !== route.name + (route.id || '')) {
+    state._lastRoute = route.name + (route.id || '');
+    renderCurrentPage();
+  } else {
+    // 已有内容，只更新动态数据（概览卡片、agent 状态等）
+    updateDynamicParts();
+  }
+}
+
+function updateDynamicParts() {
+  // 更新概览卡片的数字（不重建 DOM）
+  const route = parseRoute();
+  if (route.name === 'home' || route.name === 'agents') {
+    // 简单方案：这些页面数据量小，全量重建成本低，直接重建
+    // 但保留当前滚动位置
+    const scrollTop = $('#content').scrollTop;
+    renderCurrentPage();
+    $('#content').scrollTop = scrollTop;
+  }
+  // sessions 页面同理
+  if (route.name === 'sessions') {
+    const scrollTop = $('#content').scrollTop;
+    renderCurrentPage();
+    $('#content').scrollTop = scrollTop;
   }
 }
 
@@ -186,17 +219,52 @@ function renderOverview(route) {
 }
 
 function renderAgents(route) {
+  const agents = state.agents || [];
+  const online = agents.filter(a => (a.status || 'online') === 'online').length;
+  const offline = agents.length - online;
   $('#content').innerHTML = `
+    <div class="cards" style="margin-bottom:16px">
+      <div class="card">
+        <div class="card-label">在线 Agents</div>
+        <div class="card-value" style="color:var(--success)">${online}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">离线 Agents</div>
+        <div class="card-value" style="color:${offline > 0 ? 'var(--danger)' : 'var(--text)'}">${offline}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">总计</div>
+        <div class="card-value">${agents.length}</div>
+      </div>
+    </div>
     <div class="agent-grid">
-      ${state.agents.map(a => `
-        <div class="agent-card">
-          <h3>${escapeHtml(a.name)} <span class="badge badge-gray">${a.id}</span></h3>
-          <p>${escapeHtml(a.description)}</p>
-          <div class="skill-tags">
-            ${(a.skills || []).flatMap(s => (s.tags || []).map(tag => `<span class="skill-tag">${escapeHtml(tag)}</span>`)).join('')}
+      ${agents.map(a => {
+        const isOnline = (a.status || 'online') === 'online';
+        const statusColor = isOnline ? 'var(--success)' : 'var(--danger)';
+        const statusText = isOnline ? '在线' : '离线';
+        return `
+        <div class="agent-card" style="opacity:${isOnline ? 1 : 0.5}">
+          <div style="display:flex;justify-content:space-between;align-items:start">
+            <h3 style="margin:0">${escapeHtml(a.name)}</h3>
+            <span style="font-size:12px;color:${statusColor};font-weight:600">● ${statusText}</span>
           </div>
+          <div style="font-size:12px;color:var(--muted);margin:2px 0 8px">
+            <span class="badge badge-gray">${a.id || '-'}</span>
+            ${a.protocol ? `<span class="badge badge-gray">${a.protocol}</span>` : ''}
+          </div>
+          <p style="margin:0 0 8px">${escapeHtml(a.description || '')}</p>
+          ${a.endpoint ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px;word-break:break-all">🔗 ${escapeHtml(a.endpoint)}</div>` : ''}
+          <div class="skill-tags">
+            ${(a.skills || []).flatMap(s => {
+              // skills 可能是字符串列表或对象列表
+              if (typeof s === 'string') return [`<span class="skill-tag">${escapeHtml(s)}</span>`];
+              return (s.tags || [s.id || s.name]).map(tag => `<span class="skill-tag">${escapeHtml(tag)}</span>`);
+            }).join('')}
+          </div>
+          ${a.last_heartbeat ? `<div style="font-size:10px;color:var(--muted);margin-top:8px">心跳: ${fmtTime(a.last_heartbeat)}</div>` : ''}
         </div>
-      `).join('')}
+        `;
+      }).join('')}
     </div>
   `;
 }

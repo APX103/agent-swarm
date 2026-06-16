@@ -89,28 +89,39 @@ class AgentRegistry:
     async def register(self, agent_data: dict, internal: bool = False) -> str:
         """Register a new agent.
 
+        Same endpoint = same agent. If an agent with this endpoint already
+        exists, its record is updated in place (not duplicated). This prevents
+        the duplicate-accumulation problem on Swarm restart.
+
         Parameters
         ----------
         agent_data:
-            Dict with keys matching :class:`AgentRegistration` (``name``,
-            ``endpoint``, ``skills``, etc.).  Extra keys are preserved.
+            Dict with keys matching :class:`AgentRegistration`.
         internal:
-            If True, the agent is a platform-internal declared agent (e.g. from
-            ``agents/*.yaml``) and never expires; it is always considered online.
+            If True, declared from agents/*.yaml — never expires, always online.
 
         Returns
         -------
         str
-            The generated ``agent_id``.
+            The agent_id (stable per endpoint).
         """
         from src.registry.models import AgentInfo  # avoid circular at import-time
 
         redis = await self._ensure_redis()
-
-        agent_id = uuid.uuid4().hex[:16]
+        endpoint = agent_data["endpoint"]
         now = time.time()
 
-        # Merge defaults — callers may omit some fields
+        # ── endpoint 去重：同 endpoint 覆盖已有记录，不新增 ─────────────────
+        ep_index_key = f"agent:registry:endpoint:{endpoint}"
+        existing_id_raw = await redis.get(ep_index_key)
+        if existing_id_raw:
+            # 已有同 endpoint 的 agent——复用它的 id，覆盖记录
+            agent_id = existing_id_raw if isinstance(existing_id_raw, str) else existing_id_raw.decode()
+            logger.info("Re-registering agent %s (endpoint=%s) — updating in place", agent_id, endpoint)
+        else:
+            agent_id = uuid.uuid4().hex[:16]
+
+        # Merge defaults
         agent_data.setdefault("version", "0.1.0")
         agent_data.setdefault("protocol", "http")
         agent_data.setdefault("skills", [])
@@ -141,6 +152,22 @@ class AgentRegistry:
             if not internal:
                 pipeline.expire(key, self._heartbeat_ttl)
 
+            # endpoint → agent_id 索引（同 endpoint 只指向一个 agent）
+            pipeline.set(ep_index_key, agent_id)
+            if not internal:
+                pipeline.expire(ep_index_key, self._heartbeat_ttl)
+
+            # 如果是覆盖注册，先从旧的 skill SET 里清掉（skill 可能变了）
+            if existing_id_raw:
+                old_data_raw = await redis.hget(key, "data")
+                if old_data_raw:
+                    try:
+                        old_record = json.loads(old_data_raw if isinstance(old_data_raw, str) else old_data_raw.decode())
+                        for old_skill in old_record.get("skills", []):
+                            pipeline.srem(_skill_key(old_skill), agent_id)
+                    except Exception:
+                        pass
+
             # Add agent_id to each skill index SET
             for skill in agent_data["skills"]:
                 pipeline.sadd(_skill_key(skill), agent_id)
@@ -155,7 +182,7 @@ class AgentRegistry:
                 json.dumps({"agent_id": agent_id, "name": record["name"], "timestamp": now}),
             )
 
-            logger.info("Registered agent %s (%s)", agent_id, record["name"])
+            logger.info("Registered agent %s (%s, endpoint=%s)", agent_id, record["name"], endpoint)
             return agent_id
 
         except Exception:

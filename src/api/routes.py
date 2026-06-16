@@ -269,16 +269,27 @@ async def read_artifact(task_id: str, file_path: str):
     return {"name": file_path, "content": content, "size": full.stat().st_size}
 
 
-@router.get("/api/agents", response_model=list[AgentInfo])
+@router.get("/api/agents")
 async def list_agents():
-    """列出可用 Agent 类型"""
+    """列出可用 Agent 类型（含在线状态 + endpoint，从 registry 实时读取）。
+
+    优先读 registry（运行时状态）；如果 registry 不可用，回退到静态 config。
+    """
+    # 尝试从 registry 读实时数据
+    if orchestrator and hasattr(orchestrator, '_dispatcher'):
+        dispatcher = orchestrator._dispatcher
+        for backend in getattr(dispatcher, '_backends', []):
+            if hasattr(backend, 'registry') and backend.registry is not None:
+                try:
+                    agents = await backend.registry.list_agents(online_only=False)
+                    if agents:
+                        return agents
+                except Exception:
+                    pass
+    # 回退：静态 config
     return [
-        AgentInfo(
-            id=ac.id,
-            name=ac.name,
-            description=ac.description,
-            skills=ac.skills,
-        )
+        {"id": ac.id, "name": ac.name, "description": ac.description,
+         "skills": ac.skills, "status": "unknown", "endpoint": ""}
         for ac in settings.agent_cards
     ]
 
