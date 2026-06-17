@@ -50,7 +50,14 @@ def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
         return cb
 
 
-def set_deps(registry, adapter_manager, task_manager=None, session_manager=None, session_service=None, dispatcher=None):
+def set_deps(
+    registry,
+    adapter_manager,
+    task_manager=None,
+    session_manager=None,
+    session_service=None,
+    dispatcher=None,
+) -> None:
     """Set gateway dependencies (called from main.py lifespan).
 
     The last three are optional and enable the enriched direct-chat path on
@@ -325,14 +332,14 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
     task.session_id = body.session_id
     task.work_dir = Path(sess.work_dir)
 
-    async def on_event(event: dict):
+    async def on_event(event: dict) -> None:
         await ws_manager.broadcast(task.task_id, event)
 
     task.subscribe(on_event)
     await _task_manager.update_status(task.task_id, TaskStatus.RUNNING)
 
     # forward worker progress snapshots to the WS as agent_progress events
-    async def on_progress(snap: dict):
+    async def on_progress(snap: dict) -> None:
         await ws_manager.broadcast(
             task.task_id,
             {"type": "agent_progress", "task_id": task.task_id, "agent": agent_id, "data": snap},
@@ -347,7 +354,7 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
         agent_id=agent_id,  # direct selection — bypass skill matching
     )
 
-    async def run_direct():
+    async def run_direct() -> None:
         try:
             await _session_service.append_event(body.session_id, {
                 "type": "agent_dispatched",

@@ -39,7 +39,7 @@ class OrchestratorResolver:
         task_id: str,
         tenant_id: str,
         user_message: str,
-        event_callback: EventCallback = None,
+        event_callback: Optional[EventCallback] = None,
         session=None,
     ) -> str:
         if self._config.provider == "external":

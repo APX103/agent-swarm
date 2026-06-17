@@ -42,7 +42,15 @@ _idempotency_lock = asyncio.Lock()
 dead_letters = DeadLetterStore()
 
 
-def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, resolver=None, sess_mgr=None, session_svc=None, dispatcher=None):
+def set_deps(
+    orch: Orchestrator,
+    tm: TaskManager,
+    pool: ContainerPoolManager,
+    resolver=None,
+    sess_mgr=None,
+    session_svc=None,
+    dispatcher=None,
+) -> None:
     global orchestrator, task_manager, pool_manager, orchestrator_resolver, session_manager, _session_service, _dispatcher
     orchestrator = orch
     task_manager = tm
@@ -136,7 +144,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
             _idempotency_index[idempotency_key] = task.task_id
     
     # 订阅事件到 WebSocket 广播
-    async def on_event(event: dict):
+    async def on_event(event: dict) -> None:
         await ws_manager.broadcast(task.task_id, event)
     
     task.subscribe(on_event)
@@ -148,7 +156,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
     set_trace_id(task.task_id)
 
     # 在后台执行编排
-    async def run_orchestration():
+    async def run_orchestration() -> None:
         # per-tenant backpressure: cap in-flight orchestrations per tenant
         sem = await _get_tenant_semaphore(task.tenant_id)
         async with sem:

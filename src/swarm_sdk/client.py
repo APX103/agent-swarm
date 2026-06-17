@@ -1,6 +1,7 @@
 """Async HTTP client for agents to self-register with the swarm gateway."""
 import asyncio
 import logging
+from typing import Any
 
 import httpx
 
@@ -77,7 +78,12 @@ class AgentClient:
     async def __aenter__(self) -> "AgentClient":
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any,
+    ) -> None:
         await self.deregister()
 
     # ── internal helpers ──────────────────────────────────────────────────────

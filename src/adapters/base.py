@@ -29,7 +29,10 @@ class AgentCapabilities:
 class AgentBackend(ABC):
     @abstractmethod
     async def invoke(
-        self, task: str, context: dict = None, on_progress: Optional[ProgressCallback] = None
+        self,
+        task: str,
+        context: Optional[dict] = None,
+        on_progress: Optional[ProgressCallback] = None,
     ) -> AgentResult: ...
 
     @abstractmethod
