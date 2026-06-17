@@ -186,7 +186,7 @@ async def _lifespan(app: FastAPI):
         try:
             await registry.close()
         except Exception:
-            pass
+            logger.warning("Error closing registry during shutdown", exc_info=True)
     if pool_manager:
         await pool_manager.shutdown()
     logger.info("👋 Goodbye!")

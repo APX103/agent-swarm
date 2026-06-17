@@ -119,7 +119,7 @@ class ContainerPoolManager:
                     old.remove(force=True)
                     logger.info(f"Removed stale container {container_name}")
                 except Exception:
-                    pass
+                    logger.warning("Could not remove stale container %s", container_name, exc_info=True)
                 container = await self._spawn_container(i)
                 if container:
                     self._pool[container.container_id] = container
@@ -287,7 +287,8 @@ class ContainerPoolManager:
                         logger.info(f"Worker {idle.container_name} ready on port {idle.port}")
                         break
             except Exception:
-                pass
+                logger.warning("Worker readiness check failed for %s (port %s), retrying...",
+                             idle.container_name, idle.port, exc_info=True)
             await asyncio.sleep(2)
         else:
             # Worker didn't become ready in time. In degraded/mock mode there's no
@@ -357,7 +358,7 @@ class ContainerPoolManager:
                 c.stop(timeout=5)
                 c.remove()
             except Exception:
-                pass
+                logger.warning("Error shutting down container %s", container.container_name, exc_info=True)
         self._pool.clear()
         logger.info("Container pool shut down")
     

@@ -294,7 +294,7 @@ async def list_agents():
                     if agents:
                         return agents
                 except Exception:
-                    pass
+                    logger.warning("list_agents fallback failed for a backend", exc_info=True)
     # 回退：静态 config
     return [
         {"id": ac.id, "name": ac.name, "description": ac.description,

@@ -43,6 +43,21 @@
 
 ## 快速开始
 
+### 前置条件
+
+- **Python 3.12+**（项目已自带 `.venv`）
+- **Docker & Docker Compose**（用于 worker 容器池）
+- **Redis**（可通过 `docker run` 快速启动）
+
+### 方式一：Docker Compose（推荐，一键启动）
+
+```bash
+cp .env.example .env   # 填入 LLM API Key
+docker compose up --build
+```
+
+### 方式二：本地开发
+
 ### 1. 构建 Worker 镜像
 
 ```bash
@@ -60,7 +75,7 @@ cp .env.example .env
 **必须配置的：**
 ```bash
 LLM_DEFAULT_API_KEY=你的真实key
-LLM_DEFAULT_MODEL=glm-4.7
+LLM_DEFAULT_MODEL=glm-coding-plan
 LLM_DEFAULT_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 REDIS_URL=redis://localhost:6379
 ```
