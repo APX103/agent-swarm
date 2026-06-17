@@ -45,9 +45,9 @@
 
 ### 前置条件
 
-- **Python 3.12+**（项目已自带 `.venv`）
+- **Python 3.12+**
 - **Docker & Docker Compose**（用于 worker 容器池）
-- **Redis**（可通过 `docker run` 快速启动）
+- **Redis**（Docker Compose 会自动启动；本地开发需自行启动）
 
 ### 方式一：Docker Compose（推荐，一键启动）
 
@@ -56,16 +56,30 @@ cp .env.example .env   # 填入 LLM API Key
 docker compose up --build
 ```
 
+启动后访问：
+- Dashboard：`http://localhost:9000/dashboard/`
+- API：`http://localhost:9000/api/...`
+
 ### 方式二：本地开发
 
-### 1. 构建 Worker 镜像
+#### 1. 克隆并安装依赖
 
 ```bash
 cd /your/path/swarm
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+> 项目已附带 `.venv` 时可直接 `source .venv/bin/activate && pip install -e ".[dev]"` 更新依赖。
+
+#### 2. 构建 Worker 镜像
+
+```bash
 docker build -t swarm-worker:latest -f docker/Dockerfile.worker .
 ```
 
-### 2. 配置环境变量
+#### 3. 配置环境变量
 
 ```bash
 cp .env.example .env
@@ -73,6 +87,7 @@ cp .env.example .env
 ```
 
 **必须配置的：**
+
 ```bash
 LLM_DEFAULT_API_KEY=你的真实key
 LLM_DEFAULT_MODEL=glm-coding-plan
@@ -80,27 +95,34 @@ LLM_DEFAULT_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 REDIS_URL=redis://localhost:6379
 ```
 
-### 3. 启动 Redis
+#### 4. 启动 Redis
 
 ```bash
 docker run -d --name swarm-redis -p 6379:6379 redis:7-alpine
 ```
 
-### 4. 启动 Swarm 后端
+#### 5. 启动 Swarm 后端
 
 ```bash
 source .venv/bin/activate
 python -m uvicorn src.main:app --host 0.0.0.0 --port 9000
 ```
 
+或使用脚本：
+
+```bash
+./start-orchestrator.sh
+```
+
 **使用外部编排器（如 eino-agent）：**
+
 ```bash
 ORCHESTRATOR_PROVIDER=external \
 ORCHESTRATOR_EXTERNAL_ENDPOINT=http://localhost:9030 \
 python -m uvicorn src.main:app --host 0.0.0.0 --port 9000
 ```
 
-### 5. 打开 Web UI
+#### 6. 打开 Web UI
 
 浏览器访问 `http://localhost:9000/ui`：
 - **🧭 Copilot 模式**：和编排器对话，自动拆解任务、分派多个 Agent、汇总产物
@@ -108,7 +130,7 @@ python -m uvicorn src.main:app --host 0.0.0.0 --port 9000
 
 **监控台**：`http://localhost:9000/dashboard/` — 查看 Agent 在线状态、Session 事件链、任务列表
 
-### 6. （可选）起 mock Agent 做 demo
+#### 7. （可选）起 mock Agent 做 demo
 
 ```bash
 python agents/mock-a2a-worker.py --start-port 9001 --count 10
@@ -177,7 +199,7 @@ swarm/
 ├── web/                     # 聊天 UI（纯静态，Copilot + 直聊双模式）
 ├── dashboard/               # 监控台（Agent 状态/Session 事件链/任务列表）
 ├── config/                  # 配置（default.yaml.example 是模板，default.yaml 被 gitignore）
-├── docker/                  # Dockerfile.worker + entrypoint.sh
+├── docker/                  # Dockerfile.worker + Dockerfile.orchestrator + entrypoint.sh
 ├── docs/                    # 文档
 │   ├── DEPLOYMENT.md        # 部署指南
 │   ├── E2E-WALKTHROUGH.md   # 全量操作手册
@@ -199,7 +221,7 @@ swarm/
 │   ├── observability/       # trace_id + metrics
 │   ├── reliability/         # 死信队列 + 熔断器
 │   └── common/              # a2a_client 等
-├── tests/                   # 测试（327 passed）
+├── tests/                   # 测试（348 passed）
 ├── .env.example
 ├── pyproject.toml
 └── docker-compose.yml
@@ -212,7 +234,7 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
-当前状态：**327 tests passed**
+当前状态：**348 tests passed**
 
 ## 技术栈
 

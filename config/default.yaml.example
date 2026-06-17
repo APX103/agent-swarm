@@ -24,7 +24,7 @@ container_pool:
 
 # 存储配置
 storage:
-  shared_output_base: "/home/apx103/work/swarm/shared_output"
+  shared_output_base: "./shared_output"
 
 # 超时配置（秒）
 timeouts:
