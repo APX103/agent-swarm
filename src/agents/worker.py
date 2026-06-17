@@ -32,6 +32,9 @@ AGENT_PORT = int(os.environ.get("AGENT_PORT", "9001"))
 TASK_ID = os.environ.get("TASK_ID", "")
 SHARED_DIR = os.environ.get("SHARED_DIR", "/workspace/artifacts")
 
+# Sentinel so we can tell whether a contextvar was explicitly set.
+_UNSET = object()
+
 # Per-request shared_dir（contextvars 天然隔离并发请求，不会被互相覆盖）
 # reload_config 设置它；execute_file_tool 读它。
 # 注意：default 用 lambda 读 os.environ，兼容 monkeypatch.setenv 的测试。
@@ -39,6 +42,28 @@ _request_shared_dir: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_request_shared_dir",
     default=os.environ.get("SHARED_DIR", "/workspace/artifacts"),
 )
+# Per-request LLM / role config isolation (same worker process may serve
+# different roles / tasks / directories across warm containers).
+_request_role: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_role", default=_UNSET
+)
+_request_model: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_model", default=_UNSET
+)
+_request_base_url: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_base_url", default=_UNSET
+)
+_request_api_key: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_api_key", default=_UNSET
+)
+_request_task_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_request_task_id", default=_UNSET
+)
+
+
+def _get_context(var: contextvars.ContextVar, fallback):
+    val = var.get()
+    return fallback if val is _UNSET else val
 
 CONFIG_FILE = "/etc/swarm/config.json"
 
@@ -72,8 +97,13 @@ def reload_config() -> None:
     AGENT_PORT = int(_set("port", str(AGENT_PORT)))
     TASK_ID = _set("task_id", TASK_ID)
     SHARED_DIR = _set("shared_dir", SHARED_DIR)
-    # 同步到 per-request contextvar（并发隔离的真正来源）
+    # 同步到 per-request contextvars（并发隔离的真正来源）
     _request_shared_dir.set(SHARED_DIR)
+    _request_role.set(AGENT_ROLE)
+    _request_model.set(LLM_MODEL)
+    _request_base_url.set(LLM_BASE_URL)
+    _request_api_key.set(LLM_API_KEY)
+    _request_task_id.set(TASK_ID)
     if "system_prompt" in cfg:
         os.environ["AGENT_SYSTEM_PROMPT"] = str(cfg["system_prompt"])
     logger.info("Reloaded config: role=%s task=%s shared_dir=%s", AGENT_ROLE, TASK_ID, SHARED_DIR)
@@ -247,31 +277,34 @@ app = FastAPI(title=f"Worker Agent ({AGENT_ROLE})")
 _tasks: dict[str, dict] = {}
 # 后台执行的任务（用于取消）
 _bg_tasks: dict[str, asyncio.Task] = {}
+# 保护 _tasks / _bg_tasks / _last_cleanup 的并发访问
+_tasks_lock = asyncio.Lock()
 
 # 任务 TTL：终态任务保留 5 分钟后清理，防止内存无限增长
 _TASK_TTL_SECONDS = 300
 _last_cleanup = 0.0
 
 
-def _cleanup_old_tasks():
+async def _cleanup_old_tasks():
     """清理超过 TTL 的终态任务（每个请求最多触发一次/分钟）。"""
     import time as _time
     global _last_cleanup
     now = _time.time()
-    if now - _last_cleanup < 60:
-        return  # 节流：最多每分钟清理一次
-    _last_cleanup = now
-    terminal = ("completed", "failed", "canceled")
-    expired = [
-        tid for tid, t in _tasks.items()
-        if t.get("status", {}).get("state") in terminal
-        and (now - t.get("_completed_at", now)) > _TASK_TTL_SECONDS
-    ]
-    for tid in expired:
-        _tasks.pop(tid, None)
-        _bg_tasks.pop(tid, None)
-    if expired:
-        logger.debug("Cleaned up %d expired tasks from worker memory", len(expired))
+    async with _tasks_lock:
+        if now - _last_cleanup < 60:
+            return  # 节流：最多每分钟清理一次
+        _last_cleanup = now
+        terminal = ("completed", "failed", "canceled")
+        expired = [
+            tid for tid, t in _tasks.items()
+            if t.get("status", {}).get("state") in terminal
+            and (now - t.get("_completed_at", now)) > _TASK_TTL_SECONDS
+        ]
+        for tid in expired:
+            _tasks.pop(tid, None)
+            _bg_tasks.pop(tid, None)
+        if expired:
+            logger.debug("Cleaned up %d expired tasks from worker memory", len(expired))
 
 
 def resolve_card(role: str) -> dict:
@@ -350,7 +383,7 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
                    （供 tasks/get 轮询），完成/失败时更新 status。
     """
     # 清理过期的终态任务（防止内存泄漏）
-    _cleanup_old_tasks()
+    await _cleanup_old_tasks()
 
     message_data = params.get("message", {})
     user_text = ""
@@ -362,14 +395,16 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
     blocking = config.get("blocking", True)
 
     task_id = str(uuid.uuid4())[:8]
+    context_id = _get_context(_request_task_id, TASK_ID)
     task = {
         "id": task_id,
-        "contextId": TASK_ID,
+        "contextId": context_id,
         "status": {"state": "working", "timestamp": None},
         "history": [message_data],
         "progress": [],
     }
-    _tasks[task_id] = task
+    async with _tasks_lock:
+        _tasks[task_id] = task
 
     def on_progress(event: dict) -> None:
         task["progress"].append(event)
@@ -400,7 +435,8 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
 
     # non-blocking: run in background, return immediately
     bg = asyncio.create_task(_run())
-    _bg_tasks[task_id] = bg
+    async with _tasks_lock:
+        _bg_tasks[task_id] = bg
     return JSONResponse({
         "jsonrpc": "2.0",
         "id": request_id,
@@ -411,8 +447,9 @@ async def handle_send_message(params: dict, request_id: int) -> JSONResponse:
 async def handle_get_task(params: dict, request_id: int) -> JSONResponse:
     """处理 tasks/get"""
     task_id = params.get("id", "")
-    task = _tasks.get(task_id)
-    
+    async with _tasks_lock:
+        task = _tasks.get(task_id)
+
     if not task:
         return JSONResponse({
             "jsonrpc": "2.0",
@@ -429,17 +466,20 @@ async def handle_get_task(params: dict, request_id: int) -> JSONResponse:
 
 async def handle_list_tasks(params: dict, request_id: int) -> JSONResponse:
     """处理 tasks/list"""
+    async with _tasks_lock:
+        tasks = list(_tasks.values())
     return JSONResponse({
         "jsonrpc": "2.0",
         "id": request_id,
-        "result": list(_tasks.values()),
+        "result": tasks,
     })
 
 
 async def handle_cancel_task(params: dict, request_id: int) -> JSONResponse:
     """处理 tasks/cancel —— 取消后台执行的 call_llm，避免继续烧 token"""
     task_id = params.get("id", "")
-    bg = _bg_tasks.get(task_id)
+    async with _tasks_lock:
+        bg = _bg_tasks.get(task_id)
     if bg and not bg.done():
         bg.cancel()
         logger.info("Cancelled background task %s", task_id)
@@ -546,16 +586,20 @@ async def call_llm(user_message: str, on_progress=None) -> str:
         },
     ]
 
+    api_key = _get_context(_request_api_key, LLM_API_KEY)
+    base_url = _get_context(_request_base_url, LLM_BASE_URL)
+    model = _get_context(_request_model, LLM_MODEL)
+
     client = OpenAI(
-        api_key=LLM_API_KEY,
-        base_url=LLM_BASE_URL,
+        api_key=api_key,
+        base_url=base_url,
         timeout=300.0,
     )
 
     async def llm_call(messages):
         return await asyncio.to_thread(
             client.chat.completions.create,
-            model=LLM_MODEL,
+            model=model,
             messages=messages,
             tools=tools,
             temperature=0.3,
