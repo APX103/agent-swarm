@@ -1,5 +1,6 @@
 """FastAPI 路由"""
 import asyncio
+import copy
 import logging
 from pathlib import Path
 from typing import Optional
@@ -161,8 +162,16 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
         sem = await _get_tenant_semaphore(task.tenant_id)
         async with sem:
             try:
-                # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
-                backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator
+                # Use a shallow copy of the orchestrator per request so
+                # per-request mutable state (messages, dispatched map) is isolated.
+                # When a resolver is wired, keep using it but point it at the copy.
+                if orchestrator_resolver is not None:
+                    orchestrator_resolver._builtin = copy.copy(orchestrator)
+                    if _session_service:
+                        orchestrator_resolver.set_session_service(_session_service)
+                    backend = orchestrator_resolver
+                else:
+                    backend = copy.copy(orchestrator)
                 result = await backend.execute(
                     task_id=task.task_id,
                     tenant_id=task.tenant_id,

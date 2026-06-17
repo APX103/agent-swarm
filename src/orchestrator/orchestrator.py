@@ -348,7 +348,9 @@ class Orchestrator:
         """
         self._current_task_id = task_id
         self._current_tenant_id = tenant_id
-        self._dispatched.clear()
+        # Per-request fresh mutable state so concurrent executions don't share
+        # dispatch records / message history.
+        self._dispatched: dict[str, tuple[str, DispatchResult]] = {}
         self._current_session_work_dir = str(session.work_dir) if session else None
         self._current_svc_session_id = session.session_id if (session and self._session_service) else None
 
