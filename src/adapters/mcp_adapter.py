@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 from typing import Any, Optional
 
 import httpx
@@ -23,6 +24,7 @@ class MCPAdapter(AgentBackend):
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
         self._request_id = 0
+        self._id_lock = threading.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._client_lock:
@@ -39,8 +41,9 @@ class MCPAdapter(AgentBackend):
             await self._client.aclose()
 
     def _next_id(self) -> int:
-        self._request_id += 1
-        return self._request_id
+        with self._id_lock:
+            self._request_id += 1
+            return self._request_id
 
     def _jsonrpc(
         self,

@@ -57,6 +57,7 @@ class Dispatcher:
         self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
         # per-target circuit breakers, keyed by (kind, agent_id|agent_type)
         self._breakers: dict[tuple[str, str], CircuitBreaker] = {}
+        self._breakers_lock = asyncio.Lock()
 
     # ── candidate resolution (R2.3) ────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ class Dispatcher:
     ) -> list[tuple[DispatchTarget, _Backend]]:
         healthy: list[tuple[DispatchTarget, _Backend]] = []
         for target, backend in pairs:
-            breaker = self._get_breaker(target)
+            breaker = await self._get_breaker(target)
             if breaker.state == CircuitState.OPEN:
                 logger.info("Skipping target (circuit open): %s", target)
                 continue
@@ -175,7 +176,7 @@ class Dispatcher:
         backend: _Backend,
         request: DispatchRequest,
     ) -> DispatchAttempt:
-        breaker = self._get_breaker(target)
+        breaker = await self._get_breaker(target)
         if breaker.state == CircuitState.OPEN:
             return DispatchAttempt(target=target, success=False, error="Circuit open")
 
@@ -183,20 +184,34 @@ class Dispatcher:
             request.timeout if request.timeout is not None else self._config.dispatch_timeout
         )
         async with self._semaphore:  # global backpressure
+            invoke_task = asyncio.create_task(backend.invoke(target, request))
             try:
-                attempt = await asyncio.wait_for(
-                    backend.invoke(target, request), timeout=timeout
-                )
+                attempt = await asyncio.wait_for(invoke_task, timeout=timeout)
             except asyncio.TimeoutError:
+                invoke_task.cancel()
+                try:
+                    await invoke_task
+                except asyncio.CancelledError:
+                    pass
                 breaker.record_failure()
                 return DispatchAttempt(
                     target=target, success=False, error=f"Dispatch timed out after {timeout}s"
                 )
             except CircuitOpenError:  # defensive (backends don't raise this today)
+                invoke_task.cancel()
+                try:
+                    await invoke_task
+                except asyncio.CancelledError:
+                    pass
                 return DispatchAttempt(target=target, success=False, error="Circuit open")
             except Exception as e:
+                invoke_task.cancel()
+                try:
+                    await invoke_task
+                except asyncio.CancelledError:
+                    pass
                 breaker.record_failure()
-                logger.warning("Dispatch invoke error for %s: %s", target, e)
+                logger.warning("Dispatch invoke error for %s", target, exc_info=True)
                 return DispatchAttempt(
                     target=target, success=False, error=f"invoke error: {e!s}"
                 )
@@ -213,10 +228,11 @@ class Dispatcher:
     def _breaker_key(self, target: DispatchTarget) -> tuple[str, str]:
         return (target.kind, target.agent_id or target.agent_type)
 
-    def _get_breaker(self, target: DispatchTarget) -> CircuitBreaker:
+    async def _get_breaker(self, target: DispatchTarget) -> CircuitBreaker:
         key = self._breaker_key(target)
-        breaker = self._breakers.get(key)
-        if breaker is None:
-            breaker = CircuitBreaker()
-            self._breakers[key] = breaker
-        return breaker
+        async with self._breakers_lock:
+            breaker = self._breakers.get(key)
+            if breaker is None:
+                breaker = CircuitBreaker()
+                self._breakers[key] = breaker
+            return breaker

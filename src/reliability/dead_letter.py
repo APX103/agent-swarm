@@ -6,6 +6,7 @@ persistent/Redis-backed store is future work.
 """
 from __future__ import annotations
 
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -26,18 +27,23 @@ class DeadLetterStore:
 
     def __init__(self, max_size: int = 256) -> None:
         self._records: Deque[DeadLetterRecord] = deque(maxlen=max_size)
+        self._lock = threading.Lock()
 
     def record(self, rec: DeadLetterRecord) -> None:
-        self._records.append(rec)
+        with self._lock:
+            self._records.append(rec)
 
     def recent(self, n: int = 50) -> list[DeadLetterRecord]:
         """Return up to the *n* most recent records (newest last)."""
         if n <= 0:
             return []
-        return list(self._records)[-n:]
+        with self._lock:
+            return list(self._records)[-n:]
 
     def all(self) -> list[DeadLetterRecord]:
-        return list(self._records)
+        with self._lock:
+            return list(self._records)
 
     def clear(self) -> None:
-        self._records.clear()
+        with self._lock:
+            self._records.clear()

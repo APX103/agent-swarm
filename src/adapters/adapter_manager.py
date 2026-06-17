@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import Optional
 
 from .base import AgentBackend
@@ -61,17 +62,20 @@ class AdapterManager:
 
     def __init__(self) -> None:
         self._adapters: dict[str, AgentBackend] = {}
+        self._lock = threading.Lock()
 
     def register(self, agent_id: str, backend: AgentBackend) -> None:
         """Register a backend adapter for a given agent ID."""
-        if agent_id in self._adapters:
-            logger.warning("Overwriting existing adapter for agent '%s'", agent_id)
-        self._adapters[agent_id] = backend
+        with self._lock:
+            if agent_id in self._adapters:
+                logger.warning("Overwriting existing adapter for agent '%s'", agent_id)
+            self._adapters[agent_id] = backend
         logger.info("Registered adapter '%s' for agent '%s'", backend.name, agent_id)
 
     def get(self, agent_id: str) -> Optional[AgentBackend]:
         """Retrieve the adapter for an agent ID, or None if not registered."""
-        return self._adapters.get(agent_id)
+        with self._lock:
+            return self._adapters.get(agent_id)
 
     def register_from_info(self, agent_id: str, agent_info: dict) -> AgentBackend:
         """Convenience: create adapter from info dict and register it."""
@@ -81,14 +85,16 @@ class AdapterManager:
 
     def unregister(self, agent_id: str) -> Optional[AgentBackend]:
         """Remove and return an adapter, or None if not found."""
-        adapter = self._adapters.pop(agent_id, None)
+        with self._lock:
+            adapter = self._adapters.pop(agent_id, None)
         if adapter:
             logger.info("Unregistered adapter for agent '%s'", agent_id)
         return adapter
 
     def list_agents(self) -> list[str]:
         """Return all registered agent IDs."""
-        return list(self._adapters.keys())
+        with self._lock:
+            return list(self._adapters.keys())
 
     async def close_all(self) -> None:
         """Close all adapters that support it (e.g., HTTP clients)."""

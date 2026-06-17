@@ -1,6 +1,7 @@
 """Gateway API routes for external agent registration."""
 import asyncio
 import logging
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -36,15 +37,17 @@ DEFAULT_HEARTBEAT_INTERVAL = 10
 
 # Per-agent circuit breakers guarding /invoke against failing external agents.
 _invoke_breakers: dict[str, CircuitBreaker] = {}
+_invoke_breakers_lock = threading.Lock()
 
 
 def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
     """Return the per-agent circuit breaker, creating it lazily."""
-    cb = _invoke_breakers.get(agent_id)
-    if cb is None:
-        cb = CircuitBreaker()
-        _invoke_breakers[agent_id] = cb
-    return cb
+    with _invoke_breakers_lock:
+        cb = _invoke_breakers.get(agent_id)
+        if cb is None:
+            cb = CircuitBreaker()
+            _invoke_breakers[agent_id] = cb
+        return cb
 
 
 def set_deps(registry, adapter_manager, task_manager=None, session_manager=None, session_service=None, dispatcher=None):

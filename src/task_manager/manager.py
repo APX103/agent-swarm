@@ -28,18 +28,21 @@ class Task:
     session_id: Optional[str] = None  # bound session (for cancel→session event linkage)
     # 事件回调
     _event_subscribers: list[Callable] = field(default_factory=list)
-    
+    _event_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
     def subscribe(self, callback: Callable[[dict], Awaitable[None]]):
         """订阅任务事件"""
         self._event_subscribers.append(callback)
-    
+
     async def emit_event(self, event: dict):
         """广播事件到所有订阅者"""
-        for cb in self._event_subscribers:
+        async with self._event_lock:
+            subscribers = list(self._event_subscribers)
+        for cb in subscribers:
             try:
                 await cb(event)
-            except Exception as e:
-                logger.error(f"Error emitting event: {e}")
+            except Exception:
+                logger.exception("Error emitting event")
 
 
 class TaskManager:
@@ -74,7 +77,8 @@ class TaskManager:
             self._tasks[task_id] = task
 
         if self._store:
-            self._store.save_task(
+            await asyncio.to_thread(
+                self._store.save_task,
                 task_id=task_id, tenant_id=tenant_id, user_message=user_message,
                 status="created", work_dir=str(work_dir),
             )
@@ -105,7 +109,8 @@ class TaskManager:
 
         # 持久化状态变更到 SQLite（覆盖 cancelled / running / 任意状态）
         if self._store and task:
-            self._store.save_task(
+            await asyncio.to_thread(
+                self._store.save_task,
                 task_id=task_id, tenant_id=task.tenant_id,
                 session_id=task.session_id,
                 status=status.value, result=task.result,
@@ -140,7 +145,8 @@ class TaskManager:
         await self.update_status(task_id, TaskStatus.COMPLETED)
 
         if self._store and task:
-            self._store.save_task(
+            await asyncio.to_thread(
+                self._store.save_task,
                 task_id=task_id, tenant_id=task.tenant_id,
                 session_id=task.session_id,
                 status=TaskStatus.COMPLETED.value, result=result,

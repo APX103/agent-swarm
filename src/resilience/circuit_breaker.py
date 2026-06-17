@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time
 from enum import Enum
 from typing import Any, Callable, Coroutine
@@ -54,6 +55,7 @@ class CircuitBreaker:
         self._state = CircuitState.CLOSED
         self._opened_at: float = 0.0
         self._half_open_successes: int = 0
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -62,39 +64,43 @@ class CircuitBreaker:
     @property
     def state(self) -> CircuitState:
         """Return the current circuit state, transitioning out of OPEN if timeout elapsed."""
-        if self._state == CircuitState.OPEN:
-            if time.monotonic() - self._opened_at >= self.timeout:
-                self._transition_to(CircuitState.HALF_OPEN)
-        return self._state
+        with self._lock:
+            if self._state == CircuitState.OPEN:
+                if time.monotonic() - self._opened_at >= self.timeout:
+                    self._transition_to_locked(CircuitState.HALF_OPEN)
+            return self._state
 
     def record_success(self) -> None:
-        self._push(True)
-        if self._state == CircuitState.HALF_OPEN:
-            self._half_open_successes += 1
-            if self._half_open_successes >= self.success_threshold:
-                logger.info("Circuit breaker transitioning CLOSED (half-open successes reached)")
-                self._transition_to(CircuitState.CLOSED)
+        with self._lock:
+            self._push_locked(True)
+            if self._state == CircuitState.HALF_OPEN:
+                self._half_open_successes += 1
+                if self._half_open_successes >= self.success_threshold:
+                    logger.info("Circuit breaker transitioning CLOSED (half-open successes reached)")
+                    self._transition_to_locked(CircuitState.CLOSED)
 
     def record_failure(self) -> None:
-        self._push(False)
-        if self._state == CircuitState.HALF_OPEN:
-            logger.info("Circuit breaker transitioning OPEN (failure in half-open)")
-            self._transition_to(CircuitState.OPEN)
-        elif self._state == CircuitState.CLOSED:
-            failures = self._count_recent_failures()
-            if failures >= self.failure_threshold:
-                logger.warning(
-                    "Circuit breaker transitioning OPEN (failures=%d >= threshold=%d)",
-                    failures,
-                    self.failure_threshold,
-                )
-                self._transition_to(CircuitState.OPEN)
+        with self._lock:
+            self._push_locked(False)
+            if self._state == CircuitState.HALF_OPEN:
+                logger.info("Circuit breaker transitioning OPEN (failure in half-open)")
+                self._transition_to_locked(CircuitState.OPEN)
+            elif self._state == CircuitState.CLOSED:
+                failures = self._count_recent_failures_locked()
+                if failures >= self.failure_threshold:
+                    logger.warning(
+                        "Circuit breaker transitioning OPEN (failures=%d >= threshold=%d)",
+                        failures,
+                        self.failure_threshold,
+                    )
+                    self._transition_to_locked(CircuitState.OPEN)
 
     def reset(self) -> None:
         """Force-reset the circuit breaker to CLOSED."""
-        self._results.clear()
-        self._half_open_successes = 0
-        self._transition_to(CircuitState.CLOSED)
+        with self._lock:
+            self._results.clear()
+            self._half_open_successes = 0
+            self._transition_to_locked(CircuitState.CLOSED)
         logger.info("Circuit breaker force-reset to CLOSED")
 
     # ------------------------------------------------------------------
@@ -112,12 +118,17 @@ class CircuitBreaker:
         Raises CircuitOpenError when the circuit is open.
         Tracks timing and records success/failure automatically.
         """
+        # `self.state` may transition OPEN -> HALF_OPEN automatically.
         current = self.state
 
-        if current == CircuitState.OPEN:
-            raise CircuitOpenError(
-                f"Circuit is open; retry after {self.timeout - (time.monotonic() - self._opened_at):.1f}s"
-            )
+        with self._lock:
+            # Re-check under lock in case state changed between read and action.
+            current = self._state
+            if current == CircuitState.OPEN:
+                retry_after = self.timeout - (time.monotonic() - self._opened_at)
+                raise CircuitOpenError(
+                    f"Circuit is open; retry after {retry_after:.1f}s"
+                )
 
         start = time.monotonic()
         try:
@@ -145,17 +156,17 @@ class CircuitBreaker:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _push(self, success: bool) -> None:
+    def _push_locked(self, success: bool) -> None:
         self._results.append((time.monotonic(), success))
         # Trim the sliding window
         if len(self._results) > self._window_size:
             self._results = self._results[-self._window_size:]
 
-    def _count_recent_failures(self) -> int:
+    def _count_recent_failures_locked(self) -> int:
         """Count failures in the sliding window (last N results)."""
         return sum(1 for _, ok in self._results if not ok)
 
-    def _transition_to(self, new_state: CircuitState) -> None:
+    def _transition_to_locked(self, new_state: CircuitState) -> None:
         old = self._state
         self._state = new_state
         if new_state == CircuitState.OPEN:
