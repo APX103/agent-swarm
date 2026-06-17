@@ -43,7 +43,7 @@ _request_shared_dir: contextvars.ContextVar[str] = contextvars.ContextVar(
 CONFIG_FILE = "/etc/swarm/config.json"
 
 
-def reload_config():
+def reload_config() -> None:
     """热重载 /etc/swarm/config.json 到当前进程环境与模块全局变量。
 
     容器池在每次 checkout 时会重写 config.json，但 Worker 进程是 warm 保留的，
@@ -305,16 +305,23 @@ def get_agent_card() -> dict:
 
 
 @app.get("/.well-known/agent.json")
-async def well_known_agent():
+async def well_known_agent() -> JSONResponse:
     return JSONResponse(get_agent_card())
 
 
 @app.post("/")
-async def a2a_endpoint(request: Request):
+async def a2a_endpoint(request: Request) -> JSONResponse:
     """A2A JSON-RPC 2.0 端点"""
     reload_config()
-    body = await request.json()
-    
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32700, "message": "Parse error"},
+        })
+
     method = body.get("method", "")
     params = body.get("params", {})
     request_id = body.get("id", 1)
@@ -555,14 +562,17 @@ async def call_llm(user_message: str, on_progress=None) -> str:
             max_tokens=8192,
         )
 
-    return await run_agent_loop(
-        llm_call=llm_call,
-        execute_tool=execute_file_tool,
-        system_prompt=system_prompt,
-        user_message=user_message,
-        max_iterations=20,
-        on_progress=on_progress,
-    )
+    try:
+        return await run_agent_loop(
+            llm_call=llm_call,
+            execute_tool=execute_file_tool,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_iterations=20,
+            on_progress=on_progress,
+        )
+    finally:
+        client.close()
 
 
 def execute_file_tool(name: str, args: dict) -> str:
@@ -593,28 +603,37 @@ def execute_file_tool(name: str, args: dict) -> str:
         return role_dir / p
     
     if name == "write_file":
-        path = _resolve_path(args["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(args["content"], encoding="utf-8")
-        return f"Written to {args['path']} ({len(args['content'])} bytes)"
+        try:
+            path = _resolve_path(args["path"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(args["content"], encoding="utf-8")
+            return f"Written to {args['path']} ({len(args['content'])} bytes)"
+        except OSError as e:
+            return f"Error writing {args['path']}: {e}"
 
     elif name == "read_file":
-        path = _resolve_path(args["path"])
-        if not path.exists():
-            return f"File not found: {args['path']}"
-        content = path.read_text(encoding="utf-8", errors="replace")
-        return content[:5000]  # 限制返回长度
+        try:
+            path = _resolve_path(args["path"])
+            if not path.exists():
+                return f"File not found: {args['path']}"
+            content = path.read_text(encoding="utf-8", errors="replace")
+            return content[:5000]  # 限制返回长度
+        except OSError as e:
+            return f"Error reading {args['path']}: {e}"
 
     elif name == "list_directory":
-        sub_path = args.get("path", "")
-        if sub_path:
-            target_dir = _resolve_path(sub_path)
-        else:
-            target_dir = role_dir
-        if not target_dir.exists():
-            return f"Directory not found: {sub_path}"
-        files = [str(f.relative_to(Path(shared_dir))) for f in target_dir.rglob("*") if f.is_file()]
-        return "\n".join(files) if files else "(empty)"
+        try:
+            sub_path = args.get("path", "")
+            if sub_path:
+                target_dir = _resolve_path(sub_path)
+            else:
+                target_dir = role_dir
+            if not target_dir.exists():
+                return f"Directory not found: {sub_path}"
+            files = [str(f.relative_to(Path(shared_dir))) for f in target_dir.rglob("*") if f.is_file()]
+            return "\n".join(files) if files else "(empty)"
+        except OSError as e:
+            return f"Error listing directory {sub_path}: {e}"
     
     elif name == "run_command":
         import subprocess
@@ -629,25 +648,31 @@ def execute_file_tool(name: str, args: dict) -> str:
             )
             output = result.stdout + result.stderr
             return output[:5000] if output else "(no output)"
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             return f"Command error: {e}"
 
     elif name == "read_shared_file":
         # 只读：读取共享任务目录（含其他 Agent 产出），路径相对任务根。
-        path = Path(shared_dir) / args["path"]
-        if not path.exists():
-            return f"File not found: {args['path']}"
-        return path.read_text(encoding="utf-8", errors="replace")[:5000]
+        try:
+            path = Path(shared_dir) / args["path"]
+            if not path.exists():
+                return f"File not found: {args['path']}"
+            return path.read_text(encoding="utf-8", errors="replace")[:5000]
+        except OSError as e:
+            return f"Error reading shared file {args['path']}: {e}"
 
     elif name == "list_shared":
-        target_dir = Path(shared_dir)
-        sub_path = args.get("path", "")
-        if sub_path:
-            target_dir = target_dir / sub_path
-        if not target_dir.exists():
-            return f"Directory not found: {sub_path}"
-        files = [str(f.relative_to(shared_dir)) for f in target_dir.rglob("*") if f.is_file()]
-        return "\n".join(files) if files else "(empty)"
+        try:
+            target_dir = Path(shared_dir)
+            sub_path = args.get("path", "")
+            if sub_path:
+                target_dir = target_dir / sub_path
+            if not target_dir.exists():
+                return f"Directory not found: {sub_path}"
+            files = [str(f.relative_to(shared_dir)) for f in target_dir.rglob("*") if f.is_file()]
+            return "\n".join(files) if files else "(empty)"
+        except OSError as e:
+            return f"Error listing shared directory {sub_path}: {e}"
 
     return f"Unknown tool: {name}"
 
