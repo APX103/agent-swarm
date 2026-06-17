@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Generator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +25,21 @@ class SQLiteStore:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_tables()
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
         c = sqlite3.connect(self._path, timeout=10)
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
 
     def _init_tables(self) -> None:
-        c = self._conn()
-        try:
+        with self._conn() as c:
             c.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -57,8 +65,6 @@ class SQLiteStore:
                 """
             )
             c.commit()
-        finally:
-            c.close()
 
     # ── tasks ──────────────────────────────────────────────────────────────────
 

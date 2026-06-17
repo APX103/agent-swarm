@@ -14,8 +14,9 @@ import logging
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Generator, Optional
 
 from src.session.models import Session
 
@@ -76,14 +77,21 @@ class SessionService:
 
     # ── low-level sync sqlite helpers (always run in a worker thread) ─────────
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
         c = sqlite3.connect(self._db_path, timeout=10)
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            yield c
+            c.commit()
+        except Exception:
+            c.rollback()
+            raise
+        finally:
+            c.close()
 
     def _init_table(self) -> None:
-        c = self._conn()
-        try:
+        with self._conn() as c:
             c.execute(
                 """CREATE TABLE IF NOT EXISTS sessions_v2 (
                     session_id  TEXT PRIMARY KEY,
@@ -95,8 +103,6 @@ class SessionService:
                 )"""
             )
             c.commit()
-        finally:
-            c.close()
 
     # ── public async API ─────────────────────────────────────────────────────
 
@@ -185,8 +191,8 @@ class SessionService:
             if sess is None:
                 return None
             _deep_merge(sess.state, delta)
-        await self._save(sess)
-        return sess
+            await self._save(sess)
+            return sess
 
     # ── internals ──────────────────────────────────────────────────────────────
 
