@@ -38,6 +38,9 @@ DEFAULT_HEARTBEAT_INTERVAL = 10
 _invoke_breakers: dict[str, CircuitBreaker] = {}
 _invoke_breakers_lock = asyncio.Lock()
 
+# Track direct-chat background tasks so exceptions are not silently lost.
+_direct_chat_tasks: dict[str, asyncio.Task] = {}
+
 
 async def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
     """Return the per-agent circuit breaker, creating it lazily."""
@@ -71,6 +74,7 @@ def set_deps(
     _session_service = session_service
     _dispatcher = dispatcher
     _invoke_breakers.clear()  # reset breaker state on (re)wiring
+    _direct_chat_tasks.clear()
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -386,7 +390,16 @@ async def _invoke_direct_chat(agent_id: str, body: InvokeRequest) -> dict:
                 "error": str(e),
             })
 
-    asyncio.create_task(run_direct())
+    direct_task = asyncio.create_task(run_direct())
+    _direct_chat_tasks[task.task_id] = direct_task
+
+    def _on_direct_done(t: asyncio.Task) -> None:
+        _direct_chat_tasks.pop(task.task_id, None)
+        exc = t.exception()
+        if exc is not None:
+            logger.exception("Direct-chat background task failed: %s", exc)
+
+    direct_task.add_done_callback(_on_direct_done)
 
     return {
         "task_id": task.task_id,
