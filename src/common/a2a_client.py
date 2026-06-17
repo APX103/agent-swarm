@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import uuid
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 from dataclasses import dataclass, field
 
 import httpx
@@ -60,13 +60,16 @@ class A2AClient:
             resp = await self._client.get(f"{self.base_url}/.well-known/agent.json")
             if resp.status_code == 200:
                 return resp.json()
-        except Exception as e:
-            logger.error(f"Failed to get agent card from {self.base_url}: {e}")
+        except Exception:
+            logger.exception("Failed to get agent card from %s", self.base_url)
         return None
     
-    async def send_message(self, message: A2AMessage,
-                          blocking: bool = True,
-                          configuration: dict = None) -> Optional[A2ATask]:
+    async def send_message(
+        self,
+        message: A2AMessage,
+        blocking: bool = True,
+        configuration: Optional[dict] = None,
+    ) -> Optional[A2ATask]:
         """发送消息给 Agent
 
         Args:
@@ -100,14 +103,16 @@ class A2AClient:
             )
             
             if resp.status_code != 200:
-                logger.error(f"A2A send_message error: {resp.status_code} {resp.text}")
+                logger.error(
+                    "A2A send_message error: %s %s", resp.status_code, resp.text
+                )
                 return None
-            
+
             result = resp.json()
-            
+
             # 解析 JSON-RPC 响应
             if "error" in result:
-                logger.error(f"A2A error: {result['error']}")
+                logger.error("A2A error: %s", result["error"])
                 return None
             
             data = result.get("result", {})
@@ -118,8 +123,8 @@ class A2AClient:
                 artifacts=data.get("artifacts", []),
                 progress=data.get("progress", []),
             )
-        except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+        except Exception:
+            logger.exception("Failed to send message to %s", self.base_url)
             return None
     
     async def get_task(self, task_id: str) -> Optional[A2ATask]:
@@ -151,8 +156,8 @@ class A2AClient:
                 artifacts=data.get("artifacts", []),
                 progress=data.get("progress", []),
             )
-        except Exception as e:
-            logger.error(f"Failed to get task: {e}")
+        except Exception:
+            logger.exception("Failed to get task %s from %s", task_id, self.base_url)
             return None
     
     async def poll_task(
@@ -199,17 +204,22 @@ class A2AClient:
             if resp.status_code == 200:
                 result = resp.json().get("result", {})
                 return result.get("status") == "canceled"
-        except Exception as e:
-            logger.error(f"Failed to cancel task: {e}")
+        except Exception:
+            logger.exception("Failed to cancel task %s on %s", task_id, self.base_url)
         return False
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()
 
     async def __aenter__(self) -> "A2AClient":
         return self
 
-    async def __aexit__(self, *args) -> None:
+    async def __aexit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[Any],
+    ) -> None:
         await self.close()
     
     def _extract_text(self, data: dict) -> str:
