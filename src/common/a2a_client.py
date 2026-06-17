@@ -205,6 +205,12 @@ class A2AClient:
 
     async def close(self):
         await self._client.aclose()
+
+    async def __aenter__(self) -> "A2AClient":
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        await self.close()
     
     def _extract_text(self, data: dict) -> str:
         """从 A2A 响应中提取文本内容"""
