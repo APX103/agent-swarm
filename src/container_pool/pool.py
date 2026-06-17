@@ -12,6 +12,13 @@ from src.config import BASE_DIR
 
 logger = logging.getLogger(__name__)
 
+# 容器侧硬编码常量（用于 spawn / checkout）
+CONTAINER_SHARED_DIR = "/workspace/artifacts"
+CONTAINER_CONFIG_PATH = "/etc/swarm/config.json"
+CONTAINER_PORT = 9001
+READINESS_MAX_WAIT = 30
+READINESS_INTERVAL = 2
+
 
 class ContainerState(str, Enum):
     IDLE = "idle"
@@ -80,7 +87,7 @@ class ContainerPoolManager:
             self._semaphore = asyncio.Semaphore(self.pool_size + self.max_overflow)
         return self._semaphore
     
-    async def startup(self):
+    async def startup(self) -> None:
         """启动容器池：创建网络、拉取镜像、预启动容器"""
         logger.info(f"Starting container pool: size={self.pool_size}, image={self.image_name}")
 
@@ -125,11 +132,11 @@ class ContainerPoolManager:
                     self._pool[container.container_id] = container
                     logger.info(f"Pre-started container {i}: {container.container_name} (port {container.port})")
             except Exception as e:
-                logger.error(f"Failed to start container {i}: {e}")
+                logger.error(f"Failed to start container {i}: {e}", exc_info=True)
         
         logger.info(f"Container pool ready: {len(self._pool)} containers")
     
-    async def _build_image(self):
+    async def _build_image(self) -> None:
         """构建 Worker 镜像"""
         # Dockerfile 在 docker/ 目录，但 build context 是项目根目录
         dockerfile_path = Path(__file__).parent.parent.parent / "docker" / "Dockerfile.worker"
@@ -160,20 +167,20 @@ class ContainerPoolManager:
                 name=container_name,
                 detach=True,
                 network=self.network_name,
-                ports={"9001/tcp": host_port},  # 容器内固定 9001，宿主机递增
+                ports={f"{CONTAINER_PORT}/tcp": host_port},  # 容器内固定端口，宿主机递增
                 volumes={
-                    self.shared_output_base: {"bind": "/workspace/artifacts", "mode": "rw"},
-                    config_file: {"bind": "/etc/swarm/config.json", "mode": "ro"},
+                    self.shared_output_base: {"bind": CONTAINER_SHARED_DIR, "mode": "rw"},
+                    config_file: {"bind": CONTAINER_CONFIG_PATH, "mode": "ro"},
                 } if not self.worker_dev_mode else {
-                    self.shared_output_base: {"bind": "/workspace/artifacts", "mode": "rw"},
-                    config_file: {"bind": "/etc/swarm/config.json", "mode": "ro"},
+                    self.shared_output_base: {"bind": CONTAINER_SHARED_DIR, "mode": "rw"},
+                    config_file: {"bind": CONTAINER_CONFIG_PATH, "mode": "ro"},
                     str(Path(__file__).parent.parent.parent / "src" / "agents"): {"bind": "/app/agents", "mode": "rw"},
                 },
                 mem_limit=self.mem_limit,
                 nano_cpus=int(self.cpu_limit * 1e9),
                 environment={
                     "CONTAINER_INDEX": str(index),
-                    "CONTAINER_PORT": "9001",  # 容器内始终 9001
+                    "CONTAINER_PORT": str(CONTAINER_PORT),  # 容器内始终使用固定端口
                     "WAIT_FOR_CONFIG": "true",  # 等待配置注入后启动
                 },
             )
@@ -185,7 +192,7 @@ class ContainerPoolManager:
                 config_file=config_file,
             )
         except Exception as e:
-            logger.error(f"Failed to spawn container {index}: {e}")
+            logger.error(f"Failed to spawn container {index}: {e}", exc_info=True)
             return None
     
     async def checkout(self, agent_card_id: str, task_id: str,
@@ -244,11 +251,11 @@ class ContainerPoolManager:
         if shared_dir_override:
             try:
                 rel = Path(shared_dir_override).relative_to(self.shared_output_base)
-                container_shared_dir = f"/workspace/artifacts/{rel}"
+                container_shared_dir = f"{CONTAINER_SHARED_DIR}/{rel}"
             except (ValueError, TypeError):
                 container_shared_dir = shared_dir_override
         else:
-            container_shared_dir = f"/workspace/artifacts/tenants/{tenant_id or 'default'}/tasks/{task_id}"
+            container_shared_dir = f"{CONTAINER_SHARED_DIR}/tenants/{tenant_id or 'default'}/tasks/{task_id}"
         config = {
             "task_id": task_id,
             "tenant_id": tenant_id or "default",
@@ -256,7 +263,7 @@ class ContainerPoolManager:
             "model": model,
             "base_url": base_url,
             "api_key": api_key,
-            "port": 9001,  # 容器内部始终使用 9001（Docker 映射到宿主机 idle.port）
+            "port": CONTAINER_PORT,  # 容器内部始终使用固定端口（Docker 映射到宿主机 idle.port）
             "shared_dir": container_shared_dir,
             "orchestrator_url": orchestrator_url,
         }
@@ -278,8 +285,8 @@ class ContainerPoolManager:
         
         # 等待 Worker 就绪（轮询健康检查）
         import httpx
-        max_wait = 30
-        for _ in range(max_wait // 2):
+        max_wait = READINESS_MAX_WAIT
+        for _ in range(max_wait // READINESS_INTERVAL):
             try:
                 async with httpx.AsyncClient(timeout=3.0) as hc:
                     resp = await hc.get(f"http://{self.worker_host}:{idle.port}/.well-known/agent.json")
@@ -289,7 +296,7 @@ class ContainerPoolManager:
             except Exception:
                 logger.warning("Worker readiness check failed for %s (port %s), retrying...",
                              idle.container_name, idle.port, exc_info=True)
-            await asyncio.sleep(2)
+            await asyncio.sleep(READINESS_INTERVAL)
         else:
             # Worker didn't become ready in time. In degraded/mock mode there's no
             # HTTP server so this always times out — we still return the container
@@ -299,7 +306,7 @@ class ContainerPoolManager:
 
         return idle
     
-    async def return_container(self, container_id: str):
+    async def return_container(self, container_id: str) -> None:
         """归还容器到池中"""
         async with self._lock:
             container = self._pool.get(container_id)
@@ -349,7 +356,7 @@ class ContainerPoolManager:
             del self._pool[container.container_id]
             self._pool[new_container.container_id] = new_container
     
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """关闭容器池"""
         logger.info("Shutting down container pool...")
         for container in self._pool.values():
@@ -360,6 +367,8 @@ class ContainerPoolManager:
             except Exception:
                 logger.warning("Error shutting down container %s", container.container_name, exc_info=True)
         self._pool.clear()
+        if self._client:
+            self._client.close()
         logger.info("Container pool shut down")
     
     def get_status(self) -> dict:
