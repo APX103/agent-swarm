@@ -29,14 +29,50 @@ class SessionService:
         self._db_path = str(db_path)
         self._base = Path(base_dir)
         self._locks: dict[str, asyncio.Lock] = {}
+        self._locks_lock = asyncio.Lock()  # protects the _locks dict itself
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_table()
 
-    def _get_lock(self, session_id: str) -> asyncio.Lock:
-        """Per-session lock to serialize read-modify-write (prevent lost updates)."""
-        if session_id not in self._locks:
-            self._locks[session_id] = asyncio.Lock()
-        return self._locks[session_id]
+    async def _get_lock(self, session_id: str) -> asyncio.Lock:
+        """Per-session lock to serialize read-modify-write (prevent lost updates).
+
+        Uses double-check locking to handle concurrent creation, and cleans up
+        locks for sessions that no longer exist to prevent unbounded growth.
+        """
+        # Fast path: check without acquiring the dict lock
+        lock = self._locks.get(session_id)
+        if lock is not None:
+            return lock
+
+        async with self._locks_lock:
+            # Double-check after acquiring the lock
+            lock = self._locks.get(session_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._locks[session_id] = lock
+            return lock
+
+    async def _cleanup_stale_locks(self) -> int:
+        """Remove locks for sessions that no longer exist in the database.
+
+        Returns the number of locks removed.
+        """
+        if not self._locks:
+            return 0
+
+        # Get all known session IDs from DB
+        rows = await asyncio.to_thread(self._list_session_ids_sync)
+        known_ids = {row[0] for row in rows}
+
+        async with self._locks_lock:
+            stale = [sid for sid in self._locks if sid not in known_ids]
+            for sid in stale:
+                del self._locks[sid]
+            return len(stale)
+
+    def _list_session_ids_sync(self) -> list[tuple]:
+        with self._conn() as c:
+            return c.execute("SELECT session_id FROM sessions_v2").fetchall()
 
     # ── low-level sync sqlite helpers (always run in a worker thread) ─────────
 
@@ -127,7 +163,8 @@ class SessionService:
         Serialized per-session to prevent concurrent append_event calls from
         losing events (read-modify-write under lock).
         """
-        async with self._get_lock(session_id):
+        lock = await self._get_lock(session_id)
+        async with lock:
             sess = await self.get_session(session_id)
             if sess is None:
                 return None
@@ -142,7 +179,8 @@ class SessionService:
         Serialized per-session to prevent concurrent update_state calls from
         clobbering each other's writes.
         """
-        async with self._get_lock(session_id):
+        lock = await self._get_lock(session_id)
+        async with lock:
             sess = await self.get_session(session_id)
             if sess is None:
                 return None

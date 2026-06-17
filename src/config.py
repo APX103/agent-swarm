@@ -1,4 +1,5 @@
 """Agent Swarm - 全局配置"""
+import logging
 import os
 import yaml
 from pathlib import Path
@@ -6,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from src.orchestrator.base import OrchestratorConfig
+
+logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).parent.parent
@@ -40,7 +43,7 @@ class ContainerPoolConfig:
 
 @dataclass
 class StorageConfig:
-    shared_output_base: str = "/home/apx103/work/swarm/shared_output"
+    shared_output_base: str = str(BASE_DIR / "shared_output")
 
 
 @dataclass
@@ -102,8 +105,12 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
     if not path.exists():
         return Settings()
 
-    with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as e:
+        logger.error("Failed to load config from %s: %s", path, e)
+        return Settings()
 
     settings = Settings()
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -20,15 +21,17 @@ class MCPAdapter(AgentBackend):
         self.server_url = server_url.rstrip("/")
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_lock = asyncio.Lock()
         self._request_id = 0
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.server_url,
-                headers={"Content-Type": "application/json"},
-                timeout=httpx.Timeout(self.timeout),
-            )
+        async with self._client_lock:
+            if self._client is None or self._client.is_closed:
+                self._client = httpx.AsyncClient(
+                    base_url=self.server_url,
+                    headers={"Content-Type": "application/json"},
+                    timeout=httpx.Timeout(self.timeout),
+                )
         return self._client
 
     async def close(self) -> None:

@@ -8,6 +8,8 @@ from typing import Optional
 from pathlib import Path
 from enum import Enum
 
+from src.config import BASE_DIR
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ class ContainerPoolManager:
         self.worker_host = settings.container_pool.worker_host if settings else "localhost"
         self.worker_dev_mode = settings.container_pool.worker_dev_mode if settings else False
 
-        self.shared_output_base = settings.storage.shared_output_base if settings else "/home/apx103/work/swarm/shared_output"
+        self.shared_output_base = settings.storage.shared_output_base if settings else str(BASE_DIR / "shared_output")
         
         self._pool: dict[str, PooledContainer] = {}  # container_id -> PooledContainer
         self._semaphore: Optional[asyncio.Semaphore] = None

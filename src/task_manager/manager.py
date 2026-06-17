@@ -119,17 +119,23 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if not task:
             return
-        
+
         task.result = result
-        
+
         # 收集产物列表
         if task.work_dir:
-            for role_dir in task.work_dir.iterdir():
-                if role_dir.is_dir() and role_dir.name.startswith("_"):
-                    continue
-                for f in role_dir.rglob("*"):
-                    if f.is_file():
-                        task.artifacts.append(str(f.relative_to(task.work_dir)))
+            try:
+                for role_dir in task.work_dir.iterdir():
+                    if role_dir.is_dir() and role_dir.name.startswith("_"):
+                        continue
+                    try:
+                        for f in role_dir.rglob("*"):
+                            if f.is_file():
+                                task.artifacts.append(str(f.relative_to(task.work_dir)))
+                    except (OSError, PermissionError) as e:
+                        logger.warning("Error traversing %s for artifacts: %s", role_dir, e)
+            except (OSError, PermissionError) as e:
+                logger.warning("Error listing work_dir %s for artifacts: %s", task.work_dir, e)
         
         await self.update_status(task_id, TaskStatus.COMPLETED)
 

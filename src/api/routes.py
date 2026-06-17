@@ -36,6 +36,7 @@ _dispatcher = None  # unified dispatcher (for internal dispatch endpoint)
 
 # Idempotency-Key -> task_id (in-process; cross-process persistence is future work).
 _idempotency_index: dict[str, str] = {}
+_idempotency_lock = asyncio.Lock()
 
 # Dead-letter store for failed orchestrations.
 dead_letters = DeadLetterStore()
@@ -55,16 +56,21 @@ def set_deps(orch: Orchestrator, tm: TaskManager, pool: ContainerPoolManager, re
 # Per-tenant concurrency cap: backpressure so one tenant can't saturate the workers.
 DEFAULT_TENANT_MAX_CONCURRENT = 4
 _tenant_semaphores: dict[str, asyncio.Semaphore] = {}
+_tenant_semaphore_lock = asyncio.Lock()
 
 
-def _get_tenant_semaphore(
+async def _get_tenant_semaphore(
     tenant_id: str, limit: int = DEFAULT_TENANT_MAX_CONCURRENT
 ) -> asyncio.Semaphore:
     """Return the per-tenant semaphore, creating it lazily on first use."""
     sem = _tenant_semaphores.get(tenant_id)
     if sem is None:
-        sem = asyncio.Semaphore(limit)
-        _tenant_semaphores[tenant_id] = sem
+        async with _tenant_semaphore_lock:
+            # Double-check: another coroutine may have created it while we waited.
+            sem = _tenant_semaphores.get(tenant_id)
+            if sem is None:
+                sem = asyncio.Semaphore(limit)
+                _tenant_semaphores[tenant_id] = sem
     return sem
 
 
@@ -92,7 +98,8 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
     """接收用户消息，创建并执行任务"""
     # 幂等：同一 Idempotency-Key 复用已有 task，不重复编排
     if idempotency_key:
-        existing_id = _idempotency_index.get(idempotency_key)
+        async with _idempotency_lock:
+            existing_id = _idempotency_index.get(idempotency_key)
         if existing_id is not None and task_manager is not None:
             existing = task_manager.get_task(existing_id)
             if existing is not None:
@@ -125,7 +132,8 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
         task.session_id = sess.session_id
 
     if idempotency_key:
-        _idempotency_index[idempotency_key] = task.task_id
+        async with _idempotency_lock:
+            _idempotency_index[idempotency_key] = task.task_id
     
     # 订阅事件到 WebSocket 广播
     async def on_event(event: dict):
@@ -142,7 +150,8 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
     # 在后台执行编排
     async def run_orchestration():
         # per-tenant backpressure: cap in-flight orchestrations per tenant
-        async with _get_tenant_semaphore(task.tenant_id):
+        sem = await _get_tenant_semaphore(task.tenant_id)
+        async with sem:
             try:
                 # Pluggable orchestrator: use the resolver when wired, else the bare orchestrator.
                 backend = orchestrator_resolver if orchestrator_resolver is not None else orchestrator

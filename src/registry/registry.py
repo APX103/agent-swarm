@@ -166,7 +166,7 @@ class AgentRegistry:
                         for old_skill in old_record.get("skills", []):
                             pipeline.srem(_skill_key(old_skill), agent_id)
                     except Exception:
-                        pass
+                        logger.warning("Failed to clean up old skill index for agent %s", agent_id, exc_info=True)
 
             # Add agent_id to each skill index SET
             for skill in agent_data["skills"]:

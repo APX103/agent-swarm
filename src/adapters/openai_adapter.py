@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -24,17 +25,19 @@ class OpenAIAdapter(AgentBackend):
         self.model = model
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_lock = asyncio.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers=headers,
-                timeout=httpx.Timeout(self.timeout),
-            )
+        async with self._client_lock:
+            if self._client is None or self._client.is_closed:
+                headers = {"Content-Type": "application/json"}
+                if self.api_key:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+                self._client = httpx.AsyncClient(
+                    base_url=self.base_url,
+                    headers=headers,
+                    timeout=httpx.Timeout(self.timeout),
+                )
         return self._client
 
     async def close(self) -> None:

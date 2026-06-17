@@ -4,6 +4,7 @@ Replaces the previous ``"a2a" -> OpenAIAdapter`` alias: external agents that spe
 the A2A protocol (the same protocol the Docker workers use) are now invoked through
 a real A2A client rather than being treated as OpenAI-compatible.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -17,15 +18,17 @@ class A2AAdapter(AgentBackend):
     """Adapter for A2A-protocol agents."""
 
     def __init__(self, base_url: str, timeout: int = 300, **kwargs) -> None:
-        # kwargs lets factory pass through registry metadata (name, description,
-        # skills, etc.) without failing the strict signature.
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client: Optional[A2AClient] = None
+        self._client_lock = asyncio.Lock()
 
-    def _get_client(self) -> A2AClient:
+    async def _get_client(self) -> A2AClient:
+        """Return the A2A client, creating it lazily under a lock."""
         if self._client is None:
-            self._client = A2AClient(self.base_url, timeout=float(self.timeout))
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = A2AClient(self.base_url, timeout=float(self.timeout))
         return self._client
 
     async def close(self) -> None:
@@ -57,7 +60,7 @@ class A2AAdapter(AgentBackend):
         forwarding each snapshot (state + message + progress) to the callback —
         mirroring how ``DockerBackend`` streams worker progress. Otherwise block.
         """
-        client = self._get_client()
+        client = await self._get_client()
         try:
             a2a_task = await self._invoke_inner(client, task, on_progress)
         except Exception as e:
@@ -99,7 +102,7 @@ class A2AAdapter(AgentBackend):
 
     async def health_check(self) -> bool:
         """Healthy if the agent serves an AgentCard."""
-        client = self._get_client()
+        client = await self._get_client()
         try:
             card = await client.get_agent_card()
             return card is not None
