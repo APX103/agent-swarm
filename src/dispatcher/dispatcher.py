@@ -81,7 +81,7 @@ class Dispatcher:
         healthy: list[tuple[DispatchTarget, _Backend]] = []
         for target, backend in pairs:
             breaker = await self._get_breaker(target)
-            if breaker.state == CircuitState.OPEN:
+            if (await breaker.state()) == CircuitState.OPEN:
                 logger.info("Skipping target (circuit open): %s", target)
                 continue
             try:
@@ -108,7 +108,7 @@ class Dispatcher:
             pairs = await self._filter_healthy(pairs)
 
         if not pairs:
-            cached = self._cached(request)
+            cached = await self._cached(request)
             if cached is not None:
                 return cached
             return DispatchResult(
@@ -129,11 +129,11 @@ class Dispatcher:
                     attempts=attempts,
                 )
                 if self._result_cache is not None:
-                    self._result_cache.put(request.agent_type, request.task, result)
+                    await self._result_cache.put(request.agent_type, request.task, result)
                 return result
 
         # all candidates failed — try graceful degradation via the result cache
-        cached = self._cached(request)
+        cached = await self._cached(request)
         if cached is not None:
             logger.info("Serving cached result for %s (degraded)", request.agent_type)
             return DispatchResult(
@@ -153,11 +153,11 @@ class Dispatcher:
             attempts=attempts,
         )
 
-    def _cached(self, request: DispatchRequest) -> Optional[DispatchResult]:
+    async def _cached(self, request: DispatchRequest) -> Optional[DispatchResult]:
         """Return a degraded-result wrapper if the cache has a hit, else None."""
         if self._result_cache is None:
             return None
-        cached = self._result_cache.get(request.agent_type, request.task)
+        cached = await self._result_cache.get(request.agent_type, request.task)
         if cached is None:
             return None
         return DispatchResult(
@@ -177,7 +177,7 @@ class Dispatcher:
         request: DispatchRequest,
     ) -> DispatchAttempt:
         breaker = await self._get_breaker(target)
-        if breaker.state == CircuitState.OPEN:
+        if (await breaker.state()) == CircuitState.OPEN:
             return DispatchAttempt(target=target, success=False, error="Circuit open")
 
         timeout = (
@@ -193,7 +193,7 @@ class Dispatcher:
                     await invoke_task
                 except asyncio.CancelledError:
                     pass
-                breaker.record_failure()
+                await breaker.record_failure()
                 return DispatchAttempt(
                     target=target, success=False, error=f"Dispatch timed out after {timeout}s"
                 )
@@ -210,17 +210,17 @@ class Dispatcher:
                     await invoke_task
                 except asyncio.CancelledError:
                     pass
-                breaker.record_failure()
-                logger.warning("Dispatch invoke error for %s", target, exc_info=True)
+                await breaker.record_failure()
+                logger.warning("Dispatch invoke error for %s: %s", target, e, exc_info=True)
                 return DispatchAttempt(
                     target=target, success=False, error=f"invoke error: {e!s}"
                 )
 
         # backend returned an attempt — record success/failure on the breaker
         if attempt.success:
-            breaker.record_success()
+            await breaker.record_success()
         else:
-            breaker.record_failure()
+            await breaker.record_failure()
         return attempt
 
     # ── breaker bookkeeping ───────────────────────────────────────────────────

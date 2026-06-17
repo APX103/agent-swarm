@@ -177,7 +177,7 @@ async def chat(req: ChatRequest, idempotency_key: Optional[str] = Header(None, a
                 logger.error(f"Orchestration failed: {e}", exc_info=True)
                 if sess and session_manager:
                     session_manager.save(sess)
-                dead_letters.record(DeadLetterRecord(
+                await dead_letters.record(DeadLetterRecord(
                     task_id=task.task_id,
                     tenant_id=task.tenant_id,
                     error=str(e),
@@ -345,7 +345,7 @@ async def list_dead_letters(limit: int = Query(50)):
             "user_message": r.user_message,
             "timestamp": r.timestamp,
         }
-        for r in dead_letters.recent(limit)
+        for r in await dead_letters.recent(limit)
     ]
 
 

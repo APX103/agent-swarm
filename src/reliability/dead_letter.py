@@ -6,7 +6,7 @@ persistent/Redis-backed store is future work.
 """
 from __future__ import annotations
 
-import threading
+import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -27,23 +27,23 @@ class DeadLetterStore:
 
     def __init__(self, max_size: int = 256) -> None:
         self._records: Deque[DeadLetterRecord] = deque(maxlen=max_size)
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
-    def record(self, rec: DeadLetterRecord) -> None:
-        with self._lock:
+    async def record(self, rec: DeadLetterRecord) -> None:
+        async with self._lock:
             self._records.append(rec)
 
-    def recent(self, n: int = 50) -> list[DeadLetterRecord]:
+    async def recent(self, n: int = 50) -> list[DeadLetterRecord]:
         """Return up to the *n* most recent records (newest last)."""
-        if n <= 0:
-            return []
-        with self._lock:
+        async with self._lock:
+            if n <= 0:
+                return []
             return list(self._records)[-n:]
 
-    def all(self) -> list[DeadLetterRecord]:
-        with self._lock:
+    async def all(self) -> list[DeadLetterRecord]:
+        async with self._lock:
             return list(self._records)
 
-    def clear(self) -> None:
-        with self._lock:
+    async def clear(self) -> None:
+        async with self._lock:
             self._records.clear()

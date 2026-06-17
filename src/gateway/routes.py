@@ -1,7 +1,6 @@
 """Gateway API routes for external agent registration."""
 import asyncio
 import logging
-import threading
 import uuid
 from pathlib import Path
 from typing import Any, Optional
@@ -37,12 +36,12 @@ DEFAULT_HEARTBEAT_INTERVAL = 10
 
 # Per-agent circuit breakers guarding /invoke against failing external agents.
 _invoke_breakers: dict[str, CircuitBreaker] = {}
-_invoke_breakers_lock = threading.Lock()
+_invoke_breakers_lock = asyncio.Lock()
 
 
-def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
+async def _get_invoke_breaker(agent_id: str) -> CircuitBreaker:
     """Return the per-agent circuit breaker, creating it lazily."""
-    with _invoke_breakers_lock:
+    async with _invoke_breakers_lock:
         cb = _invoke_breakers.get(agent_id)
         if cb is None:
             cb = CircuitBreaker()
@@ -282,7 +281,7 @@ async def invoke_agent(agent_id: str, body: InvokeRequest):
     if adapter is None:
         raise HTTPException(status_code=404, detail=f"No adapter for agent {agent_id}")
 
-    breaker = _get_invoke_breaker(agent_id)
+    breaker = await _get_invoke_breaker(agent_id)
     try:
         result = await breaker.call(adapter.invoke, body.task, body.context)
     except CircuitOpenError as e:

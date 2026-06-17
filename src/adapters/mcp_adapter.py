@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from typing import Any, Optional
 
 import httpx
@@ -23,8 +22,8 @@ class MCPAdapter(AgentBackend):
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
+        self._id_lock = asyncio.Lock()
         self._request_id = 0
-        self._id_lock = threading.Lock()
 
     async def _get_client(self) -> httpx.AsyncClient:
         async with self._client_lock:
@@ -40,12 +39,12 @@ class MCPAdapter(AgentBackend):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
-    def _next_id(self) -> int:
-        with self._id_lock:
+    async def _next_id(self) -> int:
+        async with self._id_lock:
             self._request_id += 1
             return self._request_id
 
-    def _jsonrpc(
+    async def _jsonrpc(
         self,
         method: str,
         params: Optional[dict[str, Any]] = None,
@@ -53,7 +52,7 @@ class MCPAdapter(AgentBackend):
         return {
             "jsonrpc": "2.0",
             "method": method,
-            "id": self._next_id(),
+            "id": await self._next_id(),
             "params": params or {},
         }
 
@@ -80,7 +79,7 @@ class MCPAdapter(AgentBackend):
         client = await self._get_client()
 
         tool_name = (context or {}).get("tool_name", "default")
-        payload = self._jsonrpc(
+        payload = await self._jsonrpc(
             method="tools/call",
             params={
                 "name": tool_name,
@@ -164,7 +163,7 @@ class MCPAdapter(AgentBackend):
     async def health_check(self) -> bool:
         """Check MCP server health by sending a tools/list request."""
         client = await self._get_client()
-        payload = self._jsonrpc(method="tools/list")
+        payload = await self._jsonrpc(method="tools/list")
 
         try:
             response = await client.post("/", json=payload)

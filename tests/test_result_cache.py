@@ -15,28 +15,32 @@ from src.dispatcher.result_cache import ResultCache
 # ── ResultCache unit tests ─────────────────────────────────────────────────────
 
 
-def test_put_then_get():
+@pytest.mark.asyncio
+async def test_put_then_get():
     c = ResultCache(ttl=100)
-    c.put("a", "x", DispatchResult(success=True, output="ok"))
-    got = c.get("a", "x")
+    await c.put("a", "x", DispatchResult(success=True, output="ok"))
+    got = await c.get("a", "x")
     assert got is not None and got.output == "ok"
 
 
-def test_miss_returns_none():
-    assert ResultCache().get("a", "x") is None
+@pytest.mark.asyncio
+async def test_miss_returns_none():
+    assert await ResultCache().get("a", "x") is None
 
 
-def test_expired_entry_returns_none():
+@pytest.mark.asyncio
+async def test_expired_entry_returns_none():
     c = ResultCache(ttl=0.01)
-    c.put("a", "x", DispatchResult(success=True, output="ok"))
+    await c.put("a", "x", DispatchResult(success=True, output="ok"))
     time.sleep(0.05)
-    assert c.get("a", "x") is None
+    assert await c.get("a", "x") is None
 
 
-def test_failure_results_are_not_cached():
+@pytest.mark.asyncio
+async def test_failure_results_are_not_cached():
     c = ResultCache()
-    c.put("a", "x", DispatchResult(success=False, error="boom"))
-    assert c.get("a", "x") is None
+    await c.put("a", "x", DispatchResult(success=False, error="boom"))
+    assert await c.get("a", "x") is None
 
 
 # ── Dispatcher degradation integration ────────────────────────────────────────
@@ -72,7 +76,7 @@ async def _fail(t, r):
 @pytest.mark.asyncio
 async def test_all_fail_with_cache_hit_returns_degraded():
     cache = ResultCache(ttl=1000)
-    cache.put("a", "x", DispatchResult(success=True, output="CACHED"))
+    await cache.put("a", "x", DispatchResult(success=True, output="CACHED"))
     d = Dispatcher(
         [_Backend([_t("docker", "a")], _fail)],
         DispatcherConfig(max_retries=0, health_precheck=False),
@@ -105,4 +109,4 @@ async def test_success_populates_cache():
         result_cache=cache,
     )
     await d.dispatch(DispatchRequest(agent_type="a", task="x"))
-    assert cache.get("a", "x") is not None
+    assert await cache.get("a", "x") is not None

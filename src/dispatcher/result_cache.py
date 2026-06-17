@@ -6,8 +6,8 @@ Only successes are cached; entries expire after ``ttl`` seconds.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-import threading
 import time
 from typing import Optional
 
@@ -23,7 +23,7 @@ class ResultCache:
         self._ttl = ttl
         self._max_size = max_size
         self._store: dict[str, tuple[DispatchResult, float]] = {}
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
     @staticmethod
     def _key(agent_type: str, task: str, task_id: str = "") -> str:
@@ -31,9 +31,9 @@ class ResultCache:
         # don't return each other's cached results.
         return f"{agent_type}:{hash(task)}:{task_id}"
 
-    def get(self, agent_type: str, task: str, task_id: str = "") -> Optional[DispatchResult]:
+    async def get(self, agent_type: str, task: str, task_id: str = "") -> Optional[DispatchResult]:
         key = self._key(agent_type, task, task_id)
-        with self._lock:
+        async with self._lock:
             entry = self._store.get(key)
             if entry is None:
                 return None
@@ -43,13 +43,12 @@ class ResultCache:
                 return None
             return result
 
-    def put(self, agent_type: str, task: str, result: DispatchResult, task_id: str = "") -> None:
+    async def put(self, agent_type: str, task: str, result: DispatchResult, task_id: str = "") -> None:
         if not result.success:
             return  # never cache failures
-        key = self._key(agent_type, task, task_id)
-        with self._lock:
+        async with self._lock:
             if len(self._store) >= self._max_size:
                 # evict the entry with the nearest expiry
                 oldest_key = min(self._store, key=lambda k: self._store[k][1])
                 self._store.pop(oldest_key, None)
-            self._store[key] = (result, time.time() + self._ttl)
+            self._store[self._key(agent_type, task, task_id)] = (result, time.time() + self._ttl)

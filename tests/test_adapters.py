@@ -615,10 +615,11 @@ class TestAdapterManager:
 class TestCircuitBreaker:
     """Tests for CircuitBreaker state machine and call wrapper."""
 
-    def test_circuit_breaker_closed(self):
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_closed(self):
         """A new circuit breaker starts in CLOSED state."""
         cb = CircuitBreaker()
-        assert cb.state == CircuitState.CLOSED
+        assert (await cb.state()) == CircuitState.CLOSED
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_closed_allows_calls(self):
@@ -630,7 +631,7 @@ class TestCircuitBreaker:
 
         result = await cb.call(ok)
         assert result == "result"
-        assert cb.state == CircuitState.CLOSED
+        assert (await cb.state()) == CircuitState.CLOSED
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_opens_on_failures(self):
@@ -644,7 +645,7 @@ class TestCircuitBreaker:
             with pytest.raises(RuntimeError):
                 await cb.call(fail)
 
-        assert cb.state == CircuitState.OPEN
+        assert (await cb.state()) == CircuitState.OPEN
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_rejects_when_open(self):
@@ -657,7 +658,7 @@ class TestCircuitBreaker:
         with pytest.raises(RuntimeError):
             await cb.call(fail)
 
-        assert cb.state == CircuitState.OPEN
+        assert (await cb.state()) == CircuitState.OPEN
 
         with pytest.raises(CircuitOpenError):
             await cb.call(lambda: asyncio.sleep(0))
@@ -680,7 +681,7 @@ class TestCircuitBreaker:
                 await cb.call(fail)
 
         # With timeout=0, accessing .state transitions immediately to HALF_OPEN
-        assert cb.state == CircuitState.HALF_OPEN
+        assert (await cb.state()) == CircuitState.HALF_OPEN
 
         # Two successes should close the circuit
         async def ok():
@@ -688,11 +689,11 @@ class TestCircuitBreaker:
 
         r1 = await cb.call(ok)
         assert r1 == "ok"
-        assert cb.state == CircuitState.HALF_OPEN  # need one more
+        assert (await cb.state()) == CircuitState.HALF_OPEN  # need one more
 
         r2 = await cb.call(ok)
         assert r2 == "ok"
-        assert cb.state == CircuitState.CLOSED
+        assert (await cb.state()) == CircuitState.CLOSED
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_half_open_failure_reopens(self):
@@ -711,14 +712,14 @@ class TestCircuitBreaker:
                 await cb.call(fail)
 
         # With timeout=0, .state transitions to HALF_OPEN immediately
-        assert cb.state == CircuitState.HALF_OPEN
+        assert (await cb.state()) == CircuitState.HALF_OPEN
 
         # One success, then a failure should re-open
         async def ok():
             return "ok"
 
         await cb.call(ok)
-        assert cb.state == CircuitState.HALF_OPEN
+        assert (await cb.state()) == CircuitState.HALF_OPEN
 
         with pytest.raises(RuntimeError):
             await cb.call(fail)
@@ -745,7 +746,7 @@ class TestCircuitBreaker:
         # The call itself still returns the result
         assert result == "slow"
         # But it should have been recorded as a failure
-        assert cb.state == CircuitState.OPEN
+        assert (await cb.state()) == CircuitState.OPEN
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_reset(self):
@@ -758,10 +759,10 @@ class TestCircuitBreaker:
         with pytest.raises(RuntimeError):
             await cb.call(fail)
 
-        assert cb.state == CircuitState.OPEN
+        assert (await cb.state()) == CircuitState.OPEN
 
-        cb.reset()
-        assert cb.state == CircuitState.CLOSED
+        await cb.reset()
+        assert (await cb.state()) == CircuitState.CLOSED
 
         # After reset, calls should work again
         async def ok():
@@ -769,7 +770,7 @@ class TestCircuitBreaker:
 
         result = await cb.call(ok)
         assert result == "ok"
-        assert cb.state == CircuitState.CLOSED
+        assert (await cb.state()) == CircuitState.CLOSED
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_timeout_elapsed_opens_half_open(self):
@@ -783,11 +784,11 @@ class TestCircuitBreaker:
             with pytest.raises(RuntimeError):
                 await cb.call(fail)
 
-        assert cb.state == CircuitState.OPEN
+        assert (await cb.state()) == CircuitState.OPEN
 
         # Manually wind back the clock
         cb._opened_at = time.monotonic() - 2  # 2s ago, timeout=1s
-        assert cb.state == CircuitState.HALF_OPEN
+        assert (await cb.state()) == CircuitState.HALF_OPEN
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_call_passes_args(self):
