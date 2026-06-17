@@ -103,8 +103,14 @@ def review_artifacts(dispatched_types: list[str], artifacts_dir) -> dict:
 class Orchestrator:
     """编排器 Agent"""
     
-    def __init__(self, settings, pool_manager: ContainerPoolManager, task_manager=None,
-                 dispatcher: Optional[Dispatcher] = None, session_service=None):
+    def __init__(
+        self,
+        settings,
+        pool_manager: ContainerPoolManager,
+        task_manager=None,
+        dispatcher: Optional[Dispatcher] = None,
+        session_service=None,
+    ) -> None:
         self.settings = settings
         self.pool = pool_manager
         self.task_manager = task_manager
@@ -320,8 +326,14 @@ class Orchestrator:
             },
         ]
     
-    async def execute(self, task_id: str, tenant_id: str, user_message: str,
-                     event_callback=None, session=None) -> str:
+    async def execute(
+        self,
+        task_id: str,
+        tenant_id: str,
+        user_message: str,
+        event_callback=None,
+        session=None,
+    ) -> str:
         """执行编排流程
 
         Args:
@@ -411,9 +423,9 @@ class Orchestrator:
                     temperature=0.3,
                     max_tokens=8192,
                 )
-            except Exception as e:
-                logger.error(f"LLM call failed: {e}")
-                final_result = f"编排器调用 LLM 失败: {e}"
+            except Exception:
+                logger.exception("LLM call failed")
+                final_result = "编排器调用 LLM 失败"
                 break
             
             choice = response.choices[0]
@@ -439,7 +451,17 @@ class Orchestrator:
             finalize_ok = False
             for tool_call in msg.tool_calls:
                 fn_name = tool_call.function.name
-                fn_args = json.loads(tool_call.function.arguments)
+                try:
+                    fn_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    err_msg = f"工具调用参数解析失败: {tool_call.function.arguments[:200]}"
+                    logger.warning(err_msg, exc_info=True)
+                    self._messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": err_msg,
+                    })
+                    continue
                 
                 logger.info(f"Tool call: {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:100]})")
                 await emit("tool_call", {"tool": fn_name, "args": fn_args}, agent="orchestrator")
@@ -621,7 +643,7 @@ class Orchestrator:
             ctx["shared_dir"] = self._current_session_work_dir
         return ctx
 
-    def _get_artifacts_dir(self):
+    def _get_artifacts_dir(self) -> Optional[Path]:
         """获取产物目录——优先 task work_dir，回退 session work_dir。
 
         task.work_dir 有时没被正确设置（in-memory task 对象可能和 routes.py
@@ -635,6 +657,10 @@ class Orchestrator:
             from pathlib import Path
             return Path(self._current_session_work_dir)
         return None
+
+    async def close(self) -> None:
+        """Close the underlying LLM client."""
+        self.client.close()
 
     def _build_worker_task(self, task: str) -> str:
         """将共享上下文注入 Worker 任务描述"""

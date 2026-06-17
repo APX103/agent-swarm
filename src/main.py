@@ -54,7 +54,7 @@ async def _lifespan(app: FastAPI):
     # 1. 初始化持久化 + 任务管理器
     from src.storage.sqlite_store import SQLiteStore
     import sqlite3 as _sqlite3
-    _db_path = settings.storage.shared_output_base + "/swarm.db"
+    _db_path = str(Path(settings.storage.shared_output_base) / "swarm.db")
     store = SQLiteStore(_db_path)
     session_svc = SessionService(_db_path, settings.storage.shared_output_base)
     # 验证表确实建好了
@@ -122,7 +122,7 @@ async def _lifespan(app: FastAPI):
         await pool_manager.startup()
         logger.info("ContainerPool initialized")
     except Exception as e:
-        logger.error(f"ContainerPool startup failed (running in mock mode): {e}")
+        logger.error("ContainerPool startup failed (running in mock mode): %s", e, exc_info=True)
         logger.warning("Will operate without real Docker containers")
     
     # 5. 初始化统一 Dispatcher（Docker 容器 + 外部注册 Agent 同为候选）
@@ -189,6 +189,16 @@ async def _lifespan(app: FastAPI):
             logger.warning("Error closing registry during shutdown", exc_info=True)
     if pool_manager:
         await pool_manager.shutdown()
+    if adapter_manager:
+        try:
+            await adapter_manager.close_all()
+        except Exception:
+            logger.warning("Error closing adapter manager during shutdown", exc_info=True)
+    if orchestrator and hasattr(orchestrator, "close"):
+        try:
+            await orchestrator.close()
+        except Exception:
+            logger.warning("Error closing orchestrator during shutdown", exc_info=True)
     logger.info("👋 Goodbye!")
 
 
